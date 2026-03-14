@@ -3,7 +3,7 @@
 Assignment 3 MVP prototype for a browser-based fishing simulation focused on three graphics pillars:
 - Rendering
 - Physics and dynamics
-- NPC AI / behavior modeling
+- NPC AI / behavior modeling.
 
 ## Current MVP Features
 
