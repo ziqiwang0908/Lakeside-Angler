@@ -1,0 +1,80 @@
+:root {
+  --bg-top: #92d8df;
+  --bg-bottom: #dfe8ef;
+  --water-top: #2a6168;
+  --water-bottom: #081416;
+  --panel-bg: rgba(7, 17, 20, 0.36);
+  --panel-border: rgba(255, 255, 255, 0.16);
+  --text-main: #f4f8f8;
+  --text-muted: rgba(244, 248, 248, 0.82);
+  --font-ui: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  background: linear-gradient(to bottom, var(--bg-top), var(--bg-bottom));
+  font-family: var(--font-ui);
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+}
+
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+#ui-layer {
+  position: absolute;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 260px;
+  padding: 14px 18px;
+  text-align: center;
+  color: var(--text-main);
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+#status-text,
+#hint-text,
+#debug-text {
+  margin: 0;
+}
+
+#status-text {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#hint-text {
+  margin-top: 6px;
+  color: var(--text-muted);
+}
+
+#debug-text {
+  margin-top: 10px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
