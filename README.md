@@ -1,57 +1,34 @@
-# Lakeside Angler MVP
+# Lakeside Angler - Assignment 4 WebGL2 Build
 
-Assignment 3 MVP prototype for a browser-based fishing simulation focused on three graphics pillars:
-- Rendering
-- Physics and dynamics
-- NPC AI / behavior modeling.
+This local project has been migrated to the Assignment 4 alpha implementation.
+The playable entry is now a native WebGL2 renderer build.
 
-## Current MVP Features
+## Entry
+- `index.html`
 
-- Click on the water to cast a bobber from the rod tip.
-- The bobber follows a casting arc, floats on the water, jitters during nibble, and sinks during bite.
-- Fish patrol underwater, detect the bobber, approach it, then trigger nibble and bite states.
-- The player can hook the fish during the bite window or miss it and watch the fish escape.
-- The scene includes animated water, fishing line tension, bobber ripples, and a catch counter.
-
-## Run Locally
-
-This project uses ES modules, so run it through a local static server instead of opening `index.html` directly.
-
-### Python
-
-```powershell
-cd D:\RU_MSCS_Materials\26spring\cg\assignment3
-python -m http.server 8000
-```
-
-Open `http://localhost:8000`.
-
-### Node
-
-```powershell
-cd D:\RU_MSCS_Materials\26spring\cg\assignment3
-npx serve .
-```
-
-Open the local URL shown in the terminal.
+## Runtime Requirements
+- Browser with WebGL2 support (Chrome, Edge, Firefox)
+- Hardware acceleration enabled
 
 ## Controls
+- Mouse click on water: cast
+- Space or Reel button: reel in during bite window
+- R key: restart after result screen
 
-- `Mouse click`: cast on water or hook during the bite window
-- `D`: toggle debug HUD
-- `+` / `-`: increase or decrease fish count for stress testing
-- `R`: reset the current round
+## Game Flow
+Menu -> Active Round -> Result -> Restart
 
-## Suggested Demo Flow
+## Win / Loss
+- Win: catch 3 fish before time runs out
+- Loss: 4 fish escape or timer reaches 0 before target catches
 
-1. Show one full fishing cycle: cast, wait, nibble, bite, catch.
-2. Show a failed hook attempt so the fish escapes.
-3. Press `+` several times to increase fish count and demonstrate stress testing.
-4. Toggle the debug HUD to show state changes and approximate FPS.
+## Fish Species
+- Bluegill
+- Largemouth Bass
+- Rainbow Trout
+- Common Carp
+- Catfish
 
-## Remaining Submission Work
-
-- Record a 2-3 minute demo video.
-- Upload the code to a public GitHub repository.
-- Deploy a playable web version with GitHub Pages or Vercel.
-- Write the 1-2 page midterm report and export it as PDF.
+## Notes
+- Renderer: native WebGL2 (`canvas.getContext("webgl2")`)
+- Includes Assignment 4 loop, HUD, fish AI FSM, and multi-species behavior

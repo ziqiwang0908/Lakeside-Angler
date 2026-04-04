@@ -1,20 +1,1004 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lakeside Angler MVP</title>
-  <link rel="stylesheet" href="./style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lakeside Angler Alpha - WebGL2</title>
+  <style>
+    :root {
+      --panel: rgba(9, 28, 34, 0.76);
+      --line: rgba(220, 252, 255, 0.24);
+      --text: #e6fbff;
+      --dim: #b2d8de;
+      --accent: #ffd166;
+      --ok: #67f0c3;
+      --bad: #ff705f;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; font-family: "Trebuchet MS", Verdana, sans-serif; color: var(--text); }
+    #app { position: relative; width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+    .panel {
+      position: absolute; border-radius: 12px; border: 1px solid var(--line);
+      background: var(--panel); backdrop-filter: blur(8px); box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+    }
+    #hud { top: 14px; left: 14px; padding: 10px 12px; min-width: 260px; }
+    #hud .title { color: var(--accent); font-size: 14px; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 6px; }
+    #hud .row { display: flex; justify-content: space-between; font-size: 14px; margin: 3px 0; }
+    #statusBox { top: 14px; left: 50%; transform: translateX(-50%); min-width: 280px; text-align: center; padding: 9px 14px; }
+    #statusText { display: block; font-size: 18px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; }
+    #hintText { font-size: 13px; color: var(--dim); }
+    #controls { bottom: 14px; left: 50%; transform: translateX(-50%); padding: 8px; display: flex; gap: 8px; }
+    button {
+      border: 0; border-radius: 9px; color: #f5ffff; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+      padding: 10px 14px; cursor: pointer; transition: transform .15s ease, opacity .2s;
+    }
+    button:hover:enabled { transform: translateY(-1px); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #castBtn { background: linear-gradient(135deg, #0f7d89, #3eb0c1); }
+    #reelBtn { background: linear-gradient(135deg, #954f3e, #d47549); }
+    .overlay {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 10;
+      background: radial-gradient(circle at 50% 35%, rgba(16, 40, 48, 0.32), rgba(8, 14, 20, 0.74));
+    }
+    .hidden { display: none; }
+    .card {
+      width: min(92vw, 650px); border-radius: 16px; border: 1px solid var(--line); background: rgba(10, 32, 38, 0.88);
+      padding: 22px; box-shadow: 0 20px 48px rgba(0,0,0,.34);
+    }
+    .card h1, .card h2 { margin: 0 0 10px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .card p { margin: 0 0 10px; color: var(--dim); line-height: 1.45; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; margin: 12px 0 16px; font-size: 14px; }
+    .grid .k { color: var(--dim); }
+    .grid .v { font-weight: 700; }
+    .cta { background: linear-gradient(135deg, #2f8f9e, #5abec6); }
+    .win { color: var(--ok); }
+    .lose { color: var(--bad); }
+    @media (max-width: 760px) {
+      #hud, #statusBox { width: calc(100% - 28px); min-width: 0; }
+      #controls { width: calc(100% - 16px); }
+      #controls button { flex: 1; }
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
 </head>
 <body>
-  <div id="app">
-    <canvas id="game-canvas"></canvas>
-    <div id="ui-layer">
-      <p id="status-text">Ready to Cast</p>
-      <p id="hint-text">Click the water to cast</p>
-      <p id="debug-text"></p>
+<div id="app">
+  <canvas id="gameCanvas"></canvas>
+
+  <div id="hud" class="panel hidden">
+    <div class="title">Alpha Telemetry</div>
+    <div class="row"><span>Timer</span><strong id="timerValue">90s</strong></div>
+    <div class="row"><span>Catches</span><strong id="catchValue">0 / 3</strong></div>
+    <div class="row"><span>Escapes</span><strong id="escapeValue">0 / 4</strong></div>
+    <div class="row"><span>Fish AI</span><strong id="aiValue">SCANNING</strong></div>
+  </div>
+
+  <div id="statusBox" class="panel hidden">
+    <span id="statusText">Ready to Cast</span>
+    <span id="hintText">Click on the water to cast.</span>
+  </div>
+
+  <div id="controls" class="panel hidden">
+    <button id="castBtn">Cast</button>
+    <button id="reelBtn" disabled>Reel</button>
+  </div>
+
+  <div id="menuOverlay" class="overlay">
+    <div class="card">
+      <h1>Lakeside Angler Alpha</h1>
+      <p id="menuIntro">Assignment 4 build with complete game loop, UI/HUD, and integrated fish NPC behavior FSM. Renderer: native WebGL2. Species: Bluegill, Bass, Trout, Carp, Catfish.</p>
+      <div class="grid">
+        <div class="k">Goal</div><div class="v">Catch 3 fish</div>
+        <div class="k">Round Time</div><div class="v">90 seconds</div>
+        <div class="k">Lose Condition</div><div class="v">4 fish escape</div>
+        <div class="k">Controls</div><div class="v">Mouse + Space</div>
+      </div>
+      <button id="startBtn" class="cta">Start Session</button>
     </div>
   </div>
-  <script type="module" src="./src/main.js"></script>
+
+  <div id="resultOverlay" class="overlay hidden">
+    <div class="card">
+      <h2 id="resultTitle">Result</h2>
+      <p id="resultReason">Round complete.</p>
+      <p id="resultStats"></p>
+      <button id="restartBtn" class="cta">Play Again</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const APP = { MENU: "MENU", PLAYING: "PLAYING", RESULT: "RESULT" };
+  const FISHING = { READY: "READY", CASTING: "CASTING", WAITING: "WAITING", NIBBLE: "NIBBLE", BITE: "BITE", REELING: "REELING" };
+  const FISH = { PATROL: "PATROL", APPROACH: "APPROACH", NIBBLE: "NIBBLE", BITE: "BITE", ESCAPE: "ESCAPE" };
+  const CFG = { water: 0.43, fishCount: 10, target: 3, roundSec: 90, maxEscapes: 4 };
+
+  const canvas = document.getElementById("gameCanvas");
+  const hud = document.getElementById("hud");
+  const statusBox = document.getElementById("statusBox");
+  const controls = document.getElementById("controls");
+  const menuOverlay = document.getElementById("menuOverlay");
+  const resultOverlay = document.getElementById("resultOverlay");
+
+  const menuIntro = document.getElementById("menuIntro");
+  const timerValue = document.getElementById("timerValue");
+  const catchValue = document.getElementById("catchValue");
+  const escapeValue = document.getElementById("escapeValue");
+  const aiValue = document.getElementById("aiValue");
+  const statusText = document.getElementById("statusText");
+  const hintText = document.getElementById("hintText");
+  const resultTitle = document.getElementById("resultTitle");
+  const resultReason = document.getElementById("resultReason");
+  const resultStats = document.getElementById("resultStats");
+
+  const startBtn = document.getElementById("startBtn");
+  const restartBtn = document.getElementById("restartBtn");
+  const castBtn = document.getElementById("castBtn");
+  const reelBtn = document.getElementById("reelBtn");
+
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+  class GL2D {
+    constructor(canvasRef) {
+      this.gl = canvasRef.getContext("webgl2", { antialias: true, alpha: false, premultipliedAlpha: false });
+      this.ok = !!this.gl;
+      this.v = [];
+      this.w = 1;
+      this.h = 1;
+      if (!this.ok) return;
+      const gl = this.gl;
+      const vs = `#version 300 es
+      precision highp float;
+      in vec2 a_pos;
+      in vec4 a_col;
+      uniform vec2 u_res;
+      out vec4 v_col;
+      void main() {
+        vec2 clip = vec2(a_pos.x / u_res.x * 2.0 - 1.0, 1.0 - a_pos.y / u_res.y * 2.0);
+        gl_Position = vec4(clip, 0.0, 1.0);
+        v_col = a_col;
+      }`;
+      const fs = `#version 300 es
+      precision highp float;
+      in vec4 v_col;
+      out vec4 outColor;
+      void main() { outColor = v_col; }`;
+
+      const compile = (type, src) => {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+          const log = gl.getShaderInfoLog(s);
+          gl.deleteShader(s);
+          throw new Error(log);
+        }
+        return s;
+      };
+
+      try {
+        const p = gl.createProgram();
+        gl.attachShader(p, compile(gl.VERTEX_SHADER, vs));
+        gl.attachShader(p, compile(gl.FRAGMENT_SHADER, fs));
+        gl.linkProgram(p);
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+          throw new Error(gl.getProgramInfoLog(p));
+        }
+        this.p = p;
+        this.aPos = gl.getAttribLocation(p, "a_pos");
+        this.aCol = gl.getAttribLocation(p, "a_col");
+        this.uRes = gl.getUniformLocation(p, "u_res");
+        this.buf = gl.createBuffer();
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+        gl.enableVertexAttribArray(this.aPos);
+        gl.vertexAttribPointer(this.aPos, 2, gl.FLOAT, false, 24, 0);
+        gl.enableVertexAttribArray(this.aCol);
+        gl.vertexAttribPointer(this.aCol, 4, gl.FLOAT, false, 24, 8);
+
+        gl.useProgram(this.p);
+        gl.disable(gl.DEPTH_TEST);
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      } catch (e) {
+        this.ok = false;
+        console.error("WebGL2 setup failed:", e);
+      }
+    }
+
+    resize(w, h, dpr) {
+      if (!this.ok) return;
+      this.w = w;
+      this.h = h;
+      this.gl.viewport(0, 0, Math.floor(w * dpr), Math.floor(h * dpr));
+    }
+
+    clear(c) {
+      if (!this.ok) return;
+      this.gl.clearColor(c[0], c[1], c[2], c[3]);
+      this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+      this.v.length = 0;
+    }
+
+    vx(x, y, c) { this.v.push(x, y, c[0], c[1], c[2], c[3]); }
+
+    tri(ax, ay, bx, by, cx, cy, c) {
+      this.vx(ax, ay, c); this.vx(bx, by, c); this.vx(cx, cy, c);
+    }
+
+    rect(x, y, w, h, c) {
+      this.tri(x, y, x + w, y, x + w, y + h, c);
+      this.tri(x, y, x + w, y + h, x, y + h, c);
+    }
+
+    poly(points, c) {
+      if (points.length < 3) return;
+      const p0 = points[0];
+      for (let i = 1; i < points.length - 1; i++) {
+        this.tri(p0[0], p0[1], points[i][0], points[i][1], points[i + 1][0], points[i + 1][1], c);
+      }
+    }
+
+    line(x1, y1, x2, y2, t, c) {
+      const dx = x2 - x1, dy = y2 - y1;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.0001) return;
+      const nx = -dy / len * (t * 0.5);
+      const ny = dx / len * (t * 0.5);
+      this.tri(x1 - nx, y1 - ny, x1 + nx, y1 + ny, x2 + nx, y2 + ny, c);
+      this.tri(x1 - nx, y1 - ny, x2 + nx, y2 + ny, x2 - nx, y2 - ny, c);
+    }
+
+    circle(cx, cy, r, seg, c) { this.ellipse(cx, cy, r, r, seg, c); }
+
+    ellipse(cx, cy, rx, ry, seg, c) {
+      for (let i = 0; i < seg; i++) {
+        const a0 = i / seg * Math.PI * 2;
+        const a1 = (i + 1) / seg * Math.PI * 2;
+        this.tri(cx, cy, cx + Math.cos(a0) * rx, cy + Math.sin(a0) * ry, cx + Math.cos(a1) * rx, cy + Math.sin(a1) * ry, c);
+      }
+    }
+
+    ellipseStroke(cx, cy, rx, ry, seg, t, c) {
+      for (let i = 0; i < seg; i++) {
+        const a0 = i / seg * Math.PI * 2;
+        const a1 = (i + 1) / seg * Math.PI * 2;
+        const x0 = cx + Math.cos(a0) * rx, y0 = cy + Math.sin(a0) * ry;
+        const x1 = cx + Math.cos(a1) * rx, y1 = cy + Math.sin(a1) * ry;
+        this.line(x0, y0, x1, y1, t, c);
+      }
+    }
+
+    qcurve(x0, y0, cx, cy, x1, y1, seg, t, c) {
+      let px = x0, py = y0;
+      for (let i = 1; i <= seg; i++) {
+        const u = i / seg;
+        const x = (1 - u) * (1 - u) * x0 + 2 * (1 - u) * u * cx + u * u * x1;
+        const y = (1 - u) * (1 - u) * y0 + 2 * (1 - u) * u * cy + u * u * y1;
+        this.line(px, py, x, y, t, c);
+        px = x; py = y;
+      }
+    }
+
+    flush() {
+      if (!this.ok || this.v.length === 0) return;
+      const gl = this.gl;
+      gl.useProgram(this.p);
+      gl.uniform2f(this.uRes, this.w, this.h);
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.buf);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.v), gl.STREAM_DRAW);
+      gl.drawArrays(gl.TRIANGLES, 0, this.v.length / 6);
+      this.v.length = 0;
+    }
+  }
+
+    const C = {
+    skyTop: [0.63, 0.78, 0.90, 1], skyMid: [0.77, 0.86, 0.92, 1], skyHaze: [0.89, 0.92, 0.91, 1],
+    sunCore: [1.00, 0.94, 0.77, 0.88], sunGlow: [1.00, 0.86, 0.58, 0.22],
+    mountainFar: [0.32, 0.43, 0.49, 0.42], mountainNear: [0.24, 0.34, 0.39, 0.62],
+    shoreDark: [0.15, 0.22, 0.18, 0.78], shoreGrass: [0.26, 0.35, 0.27, 0.62],
+    watTop: [0.19, 0.42, 0.49, 1], watMid: [0.11, 0.29, 0.36, 1], watDeep: [0.05, 0.13, 0.18, 1],
+    reflA: [0.88, 0.96, 0.98, 0.10], reflB: [0.77, 0.88, 0.94, 0.07],
+    wave: [0.88, 0.97, 0.99, 0.16], ripple: [0.91, 0.99, 1.00, 0.36],
+    rodWood: [0.34, 0.23, 0.17, 1], rodEdge: [0.23, 0.15, 0.10, 1],
+    handle: [0.14, 0.09, 0.07, 1], line: [0.96, 0.98, 1.00, 0.66],
+    bobW: [0.96, 0.98, 0.99, 1], bobR: [0.90, 0.32, 0.24, 1], bobMetal: [0.72, 0.75, 0.76, 0.68],
+    shadow: [0.05, 0.08, 0.10, 0.30], aim: [1.00, 0.92, 0.70, 0.50],
+    eye: [0.97, 1.00, 1.00, 0.78], fishP: [0.16, 0.28, 0.30, 0.52],
+    fishA: [0.20, 0.35, 0.37, 0.66], fishN: [0.33, 0.49, 0.40, 0.80],
+    fishB: [0.67, 0.37, 0.24, 0.82], fishE: [0.37, 0.50, 0.41, 0.70],
+    fishTopLight: [0.74, 0.84, 0.78, 0.20], fishBelly: [0.83, 0.90, 0.88, 0.16],
+    vignette: [0.03, 0.05, 0.07, 0.10]
+  };
+
+  const gl2d = new GL2D(canvas);
+  if (!gl2d.ok) {
+    startBtn.disabled = true;
+    startBtn.textContent = "WebGL2 Unsupported";
+    menuIntro.textContent = "This build requires WebGL2. Open with a modern browser (Chrome/Edge/Firefox) and hardware acceleration enabled.";
+    return;
+  }
+
+  let appState = APP.MENU;
+  let fishingState = FISHING.READY;
+  let phaseTimer = 0;
+  let currentHookFish = null;
+  let fishSchool = [];
+  const ripples = [];
+
+  const world = { width: 1280, height: 720, time: 0, timer: CFG.roundSec, catches: 0, escapes: 0, aimX: 620, aimY: 380 };
+  const rod = { baseX: 0, baseY: 0, tipX: 0, tipY: 0 };
+  const bobber = { active: false, x: 0, y: 0, sx: 0, sy: 0, tx: 0, ty: 0, p: 0 };
+
+    const waterTop = () => world.height * CFG.water;
+  const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t), lerp(a[3], b[3], t)];
+
+  const SPECIES = [
+    {
+      id: "BLUEGILL",
+      name: "Bluegill",
+      short: "Bluegill",
+      size: [13, 18],
+      speed: [42, 70],
+      aggr: [0.95, 1.35],
+      depth: [0.20, 0.62],
+      turn: [0.8, 1.8],
+      bodyH: 0.55,
+      tail: 0.34,
+      dorsal: 0.52,
+      stripe: [0.20, 0.32, 0.30, 0.24],
+      body: [0.27, 0.43, 0.44, 0.66],
+      nibble: [0.38, 0.57, 0.52, 0.76],
+      bite: [0.71, 0.43, 0.28, 0.84],
+      topLight: [0.78, 0.88, 0.80, 0.20],
+      belly: [0.86, 0.92, 0.89, 0.16],
+      whiskers: false,
+      weight: 0.24
+    },
+    {
+      id: "BASS",
+      name: "Largemouth Bass",
+      short: "Bass",
+      size: [18, 28],
+      speed: [52, 88],
+      aggr: [1.05, 1.50],
+      depth: [0.18, 0.58],
+      turn: [0.9, 2.0],
+      bodyH: 0.44,
+      tail: 0.38,
+      dorsal: 0.48,
+      stripe: [0.14, 0.18, 0.12, 0.32],
+      body: [0.30, 0.40, 0.24, 0.68],
+      nibble: [0.40, 0.52, 0.30, 0.78],
+      bite: [0.73, 0.42, 0.22, 0.84],
+      topLight: [0.72, 0.80, 0.66, 0.22],
+      belly: [0.86, 0.88, 0.80, 0.16],
+      whiskers: false,
+      weight: 0.22
+    },
+    {
+      id: "TROUT",
+      name: "Rainbow Trout",
+      short: "Trout",
+      size: [16, 24],
+      speed: [60, 98],
+      aggr: [0.85, 1.20],
+      depth: [0.10, 0.52],
+      turn: [0.7, 1.6],
+      bodyH: 0.38,
+      tail: 0.40,
+      dorsal: 0.36,
+      stripe: [0.73, 0.43, 0.47, 0.28],
+      body: [0.34, 0.44, 0.52, 0.66],
+      nibble: [0.48, 0.60, 0.68, 0.78],
+      bite: [0.80, 0.47, 0.30, 0.84],
+      topLight: [0.84, 0.90, 0.94, 0.24],
+      belly: [0.90, 0.92, 0.95, 0.18],
+      whiskers: false,
+      weight: 0.20
+    },
+    {
+      id: "CARP",
+      name: "Common Carp",
+      short: "Carp",
+      size: [22, 32],
+      speed: [34, 58],
+      aggr: [0.55, 0.90],
+      depth: [0.34, 0.92],
+      turn: [1.1, 2.4],
+      bodyH: 0.58,
+      tail: 0.30,
+      dorsal: 0.42,
+      stripe: [0.38, 0.25, 0.14, 0.28],
+      body: [0.48, 0.35, 0.22, 0.70],
+      nibble: [0.58, 0.44, 0.29, 0.80],
+      bite: [0.76, 0.46, 0.27, 0.84],
+      topLight: [0.86, 0.74, 0.58, 0.20],
+      belly: [0.90, 0.82, 0.70, 0.16],
+      whiskers: false,
+      weight: 0.18
+    },
+    {
+      id: "CATFISH",
+      name: "Catfish",
+      short: "Catfish",
+      size: [24, 34],
+      speed: [28, 52],
+      aggr: [0.60, 1.00],
+      depth: [0.48, 0.98],
+      turn: [1.1, 2.6],
+      bodyH: 0.52,
+      tail: 0.36,
+      dorsal: 0.30,
+      stripe: [0.20, 0.26, 0.26, 0.30],
+      body: [0.30, 0.37, 0.38, 0.72],
+      nibble: [0.41, 0.49, 0.50, 0.82],
+      bite: [0.70, 0.40, 0.24, 0.84],
+      topLight: [0.74, 0.80, 0.82, 0.18],
+      belly: [0.82, 0.86, 0.88, 0.15],
+      whiskers: true,
+      weight: 0.16
+    }
+  ];
+
+  function pickSpecies() {
+    const total = SPECIES.reduce((sum, s) => sum + s.weight, 0);
+    let r = Math.random() * total;
+    for (let i = 0; i < SPECIES.length; i++) {
+      r -= SPECIES[i].weight;
+      if (r <= 0) return SPECIES[i];
+    }
+    return SPECIES[SPECIES.length - 1];
+  }
+
+  function speciesStateColor(fish) {
+    const s = fish.species;
+    if (fish.state === FISH.BITE) return s.bite;
+    if (fish.state === FISH.NIBBLE) return mix(s.body, s.nibble, 0.72);
+    if (fish.state === FISH.APPROACH) return mix(s.body, s.nibble, 0.36);
+    if (fish.state === FISH.ESCAPE) return mix(s.body, [0.64, 0.74, 0.67, s.body[3]], 0.42);
+    return s.body;
+  }
+
+  class FishAI {
+    constructor(species) {
+      this.species = species || pickSpecies();
+      this.reset();
+    }
+
+    reset() {
+      const top = waterTop() + 22;
+      const bottom = world.height - 16;
+      const span = Math.max(40, bottom - top);
+      const minY = top + span * this.species.depth[0];
+      const maxY = top + span * this.species.depth[1];
+
+      this.x = rnd(40, Math.max(80, world.width - 40));
+      this.y = rnd(minY, Math.max(minY + 6, maxY));
+      this.size = rnd(this.species.size[0], this.species.size[1]);
+      this.maxCruise = rnd(this.species.speed[0], this.species.speed[1]);
+      this.vx = this.maxCruise * (Math.random() > 0.5 ? 1 : -1);
+      this.vy = rnd(-this.maxCruise * 0.32, this.maxCruise * 0.32);
+      this.turn = rnd(this.species.turn[0], this.species.turn[1]);
+      this.state = FISH.PATROL;
+      this.timer = rnd(1.5, 3.5);
+      this.aggr = rnd(this.species.aggr[0], this.species.aggr[1]);
+      this.seed = Math.random() * Math.PI * 2;
+      this.ex = 0;
+      this.ey = 0;
+      this.chaseSpeed = this.maxCruise * 1.35;
+      this.escapeSpeed = this.maxCruise * 2.00;
+      this.orbitR = this.size * rnd(0.78, 1.08);
+    }
+
+    set(next, timer = 0) {
+      this.state = next;
+      this.timer = timer;
+    }
+
+    escape() {
+      const a = Math.atan2(this.y - bobber.y, this.x - bobber.x) + rnd(-0.5, 0.5);
+      this.ex = Math.cos(a);
+      this.ey = Math.sin(a);
+      this.set(FISH.ESCAPE, rnd(1.1, 2.2));
+    }
+
+    seek(tx, ty, dt, maxV) {
+      this.vx += (tx - this.x) * 0.9 * dt;
+      this.vy += (ty - this.y) * 0.9 * dt;
+      const s = Math.hypot(this.vx, this.vy);
+      if (s > maxV) {
+        this.vx = this.vx / s * maxV;
+        this.vy = this.vy / s * maxV;
+      }
+      this.x += this.vx * dt;
+      this.y += this.vy * dt;
+    }
+
+    keep() {
+      const t = waterTop() + 20;
+      const b = world.height - 16;
+      const edge = Math.max(14, this.size * 0.55);
+      if (this.x < edge) { this.x = edge; this.vx = Math.abs(this.vx); }
+      if (this.x > world.width - edge) { this.x = world.width - edge; this.vx = -Math.abs(this.vx); }
+      if (this.y < t + edge * 0.4) { this.y = t + edge * 0.4; this.vy = Math.abs(this.vy); }
+      if (this.y > b - edge * 0.35) { this.y = b - edge * 0.35; this.vy = -Math.abs(this.vy); }
+    }
+
+    canApproach(dt) {
+      if (!bobber.active || fishingState === FISHING.READY || fishingState === FISHING.CASTING || currentHookFish) return false;
+      const detect = 190 + this.size * 2.4;
+      const chance = dt * this.aggr * 0.76;
+      return dist(this.x, this.y, bobber.x, bobber.y) < detect && Math.random() < chance;
+    }
+
+    update(dt) {
+      if (this.state === FISH.PATROL) {
+        this.turn -= dt;
+        if (this.turn <= 0) {
+          this.vx = clamp(this.vx + rnd(-this.maxCruise * 0.55, this.maxCruise * 0.55), -this.maxCruise, this.maxCruise);
+          if (Math.abs(this.vx) < this.maxCruise * 0.35) this.vx = this.maxCruise * 0.35 * (this.vx < 0 ? -1 : 1);
+          this.vy = clamp(this.vy + rnd(-this.maxCruise * 0.26, this.maxCruise * 0.26), -this.maxCruise * 0.4, this.maxCruise * 0.4);
+          this.turn = rnd(this.species.turn[0], this.species.turn[1]);
+        }
+
+        this.x += this.vx * dt;
+        this.y += (this.vy + Math.sin(world.time * 2 + this.seed) * (6 + this.size * 0.08)) * dt;
+        this.keep();
+        if (this.canApproach(dt)) this.set(FISH.APPROACH, rnd(1.2, 3.5));
+        return;
+      }
+
+      if (this.state === FISH.APPROACH) {
+        this.timer -= dt;
+        this.seek(bobber.x + Math.sin(world.time * 5 + this.seed) * 8, bobber.y + 8, dt, this.chaseSpeed);
+        this.keep();
+        if (!bobber.active || fishingState === FISHING.READY || fishingState === FISHING.CASTING) { this.set(FISH.PATROL, rnd(1, 2)); return; }
+        const d = dist(this.x, this.y, bobber.x, bobber.y);
+        if (fishingState === FISHING.WAITING && !currentHookFish && d < 40 + this.size * 0.25 && Math.random() < dt * this.aggr * 1.45) beginNibble(this);
+        if (d > 290 || this.timer <= 0) this.set(FISH.PATROL, rnd(1, 2.4));
+        return;
+      }
+
+      if (this.state === FISH.NIBBLE) {
+        this.timer -= dt;
+        const a = world.time * 6 + this.seed;
+        this.seek(bobber.x + Math.cos(a) * this.orbitR, bobber.y + Math.sin(a) * (this.orbitR * 0.33) + 6, dt, this.chaseSpeed * 1.1);
+        this.keep();
+        return;
+      }
+
+      if (this.state === FISH.BITE) {
+        const a = world.time * 7 + this.seed;
+        const r = Math.max(10, this.orbitR * 0.56);
+        this.seek(bobber.x + Math.cos(a) * r, bobber.y + Math.sin(a) * (r * 0.30) + 4, dt, this.chaseSpeed * 1.2);
+        this.keep();
+        return;
+      }
+
+      if (this.state === FISH.ESCAPE) {
+        this.timer -= dt;
+        this.x += this.ex * this.escapeSpeed * dt;
+        this.y += this.ey * this.escapeSpeed * dt;
+        this.keep();
+        if (this.timer <= 0) this.set(FISH.PATROL, rnd(1, 2.5));
+      }
+    }
+  }
+
+  function setOverlay() {
+    menuOverlay.classList.toggle("hidden", appState !== APP.MENU);
+    resultOverlay.classList.toggle("hidden", appState !== APP.RESULT);
+    const on = appState === APP.PLAYING;
+    hud.classList.toggle("hidden", !on);
+    statusBox.classList.toggle("hidden", !on);
+    controls.classList.toggle("hidden", !on);
+  }
+
+  function setFishing(next, status, hint) {
+    fishingState = next;
+    statusText.textContent = status || next;
+    hintText.textContent = hint || "";
+    castBtn.disabled = !(appState === APP.PLAYING && fishingState === FISHING.READY);
+    reelBtn.disabled = !(appState === APP.PLAYING && fishingState === FISHING.BITE);
+  }
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+
+    function updateHUD() {
+    timerValue.textContent = fmt(world.timer);
+    catchValue.textContent = `${world.catches} / ${CFG.target}`;
+    escapeValue.textContent = `${world.escapes} / ${CFG.maxEscapes}`;
+    aiValue.textContent = currentHookFish ? `${currentHookFish.species.short} ${currentHookFish.state}` : "SCANNING";
+  }
+
+  function resetRound() {
+    world.time = 0; world.timer = CFG.roundSec; world.catches = 0; world.escapes = 0;
+    currentHookFish = null; phaseTimer = 0; ripples.length = 0;
+    fishSchool = Array.from({ length: CFG.fishCount }, () => new FishAI(pickSpecies()));
+    bobber.active = false;
+    bobber.x = rod.tipX; bobber.y = rod.tipY;
+    bobber.sx = rod.tipX; bobber.sy = rod.tipY;
+    bobber.tx = rod.tipX; bobber.ty = waterTop() + 40; bobber.p = 0;
+    setFishing(FISHING.READY, "Ready to Cast", "Click on the water to cast.");
+    updateHUD();
+  }
+
+  function endGame(win, reason) {
+    appState = APP.RESULT;
+    resultTitle.textContent = win ? "You Win" : "Session Failed";
+    resultTitle.className = win ? "win" : "lose";
+    resultReason.textContent = reason;
+    resultStats.textContent = `Catches ${world.catches}/${CFG.target} | Escapes ${world.escapes}/${CFG.maxEscapes} | Time ${fmt(world.timer)}`;
+    setOverlay();
+    castBtn.disabled = true; reelBtn.disabled = true;
+  }
+
+  function startGame() { appState = APP.PLAYING; resetRound(); setOverlay(); }
+
+  function ripple(x, y, k = 8, life = 0.45) { ripples.push({ x, y, r: 8 + k, a: .42, g: 46 + k * 3, life }); }
+
+  function castTo(x, y) {
+    if (appState !== APP.PLAYING || fishingState !== FISHING.READY || y <= waterTop() + 10) return;
+    bobber.active = true;
+    bobber.sx = rod.tipX; bobber.sy = rod.tipY;
+    bobber.tx = clamp(x, 24, world.width - 24);
+    bobber.ty = clamp(y, waterTop() + 20, world.height - 30);
+    bobber.x = bobber.sx; bobber.y = bobber.sy; bobber.p = 0;
+    currentHookFish = null;
+    setFishing(FISHING.CASTING, "Casting", "Line is in flight.");
+  }
+
+  function beginNibble(f) {
+    if (!f || appState !== APP.PLAYING || fishingState !== FISHING.WAITING || currentHookFish) return;
+    currentHookFish = f;
+    phaseTimer = rnd(0.8, 1.4);
+    f.set(FISH.NIBBLE, phaseTimer);
+    setFishing(FISHING.NIBBLE, `${f.species.short} nibble`, "Wait for full bite.");
+    ripple(bobber.x, bobber.ty, 5, .3);
+  }
+
+  function beginBite(f) {
+    if (!f || currentHookFish !== f || appState !== APP.PLAYING) return;
+    phaseTimer = 1.2;
+    f.set(FISH.BITE);
+    setFishing(FISHING.BITE, `${f.species.short} BITE`, "Reel now: SPACE or button.");
+    ripple(bobber.x, bobber.ty, 12, .5);
+  }
+
+  function missBite() {
+    world.escapes += 1;
+    if (currentHookFish) currentHookFish.escape();
+    currentHookFish = null;
+    bobber.active = false;
+    setFishing(FISHING.READY, "Fish Escaped", "Cast again.");
+    ripple(bobber.x, bobber.ty, 14, .6);
+    if (world.escapes >= CFG.maxEscapes) endGame(false, "Too many fish escaped.");
+  }
+
+  function reel() {
+    if (appState !== APP.PLAYING) return;
+    if (fishingState === FISHING.BITE) {
+      world.catches += 1;
+      const caughtSpecies = currentHookFish ? currentHookFish.species.short : "fish";
+      if (currentHookFish) currentHookFish.escape();
+      currentHookFish = null;
+      phaseTimer = .42;
+      setFishing(FISHING.REELING, `Caught ${caughtSpecies}`, "Bringing the fish in.");
+      ripple(bobber.x, bobber.ty, 16, .7);
+      if (world.catches >= CFG.target) endGame(true, "Catch target reached.");
+      return;
+    }
+    if (fishingState === FISHING.READY) castTo(world.aimX, Math.max(world.aimY, waterTop() + 12));
+  }
+
+  function updateRipples(dt) {
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const r = ripples[i];
+      r.life -= dt; r.r += r.g * dt; r.a = clamp(r.life * .9, 0, .45);
+      if (r.life <= 0) ripples.splice(i, 1);
+    }
+  }
+
+  function updateBobber(dt) {
+    if (!bobber.active) return;
+    if (fishingState === FISHING.CASTING) {
+      bobber.p = Math.min(1, bobber.p + dt * 2.3);
+      const t = easeOut(bobber.p);
+      bobber.x = lerp(bobber.sx, bobber.tx, t);
+      bobber.y = lerp(bobber.sy, bobber.ty, t) - Math.sin(t * Math.PI) * 86;
+      if (bobber.p >= 1) {
+        bobber.y = bobber.ty;
+        ripple(bobber.x, bobber.ty, 9, .4);
+        setFishing(FISHING.WAITING, "Waiting", "Fish AI is searching.");
+      }
+      return;
+    }
+    if (fishingState === FISHING.REELING) {
+      bobber.y -= dt * 120;
+      bobber.x = lerp(bobber.x, rod.tipX, dt * 4.8);
+      return;
+    }
+    let off = Math.sin(world.time * 3.6 + bobber.x * .015) * 3.4 + Math.cos(world.time * 1.8) * 1.2;
+    if (fishingState === FISHING.NIBBLE) off += Math.sin(world.time * 26) * 4.4;
+    if (fishingState === FISHING.BITE) off += 9 + Math.sin(world.time * 18) * 2.2;
+    bobber.y = bobber.ty + off;
+  }
+
+  function updatePhases(dt) {
+    if (fishingState !== FISHING.NIBBLE && fishingState !== FISHING.BITE && fishingState !== FISHING.REELING) return;
+    phaseTimer -= dt;
+    if (phaseTimer > 0) return;
+    if (fishingState === FISHING.NIBBLE) beginBite(currentHookFish);
+    else if (fishingState === FISHING.BITE) missBite();
+    else if (fishingState === FISHING.REELING) { bobber.active = false; setFishing(FISHING.READY, "Ready to Cast", "Click on the water to cast."); }
+  }
+
+  function updateGame(dt) {
+    world.time += dt;
+    world.timer = Math.max(0, world.timer - dt);
+    if (world.timer <= 0) {
+      if (world.catches >= CFG.target) endGame(true, "Timer reached zero after target completion.");
+      else endGame(false, "Time ran out.");
+      return;
+    }
+    updateBobber(dt);
+    fishSchool.forEach((f) => f.update(dt));
+    updatePhases(dt);
+    updateRipples(dt);
+    updateHUD();
+  }
+
+  function drawBackground() {
+    gl2d.clear([0.07, 0.14, 0.19, 1]);
+
+    const wt = waterTop();
+    const skySteps = 44;
+    const waterSteps = 58;
+
+    for (let i = 0; i < skySteps; i++) {
+      const t = i / (skySteps - 1);
+      const y = wt * t;
+      const col = t < 0.55 ? mix(C.skyTop, C.skyMid, t / 0.55) : mix(C.skyMid, C.skyHaze, (t - 0.55) / 0.45);
+      gl2d.rect(0, y, world.width, wt / skySteps + 2, col);
+    }
+
+    const sunX = world.width * 0.76;
+    const sunY = wt * 0.33;
+    gl2d.circle(sunX, sunY, 34, 40, C.sunCore);
+    gl2d.circle(sunX, sunY, 74, 42, C.sunGlow);
+    gl2d.circle(sunX, sunY, 130, 42, [C.sunGlow[0], C.sunGlow[1], C.sunGlow[2], 0.09]);
+
+    for (let i = 0; i < waterSteps; i++) {
+      const t = i / (waterSteps - 1);
+      const y = wt + (world.height - wt) * t;
+      const col = t < 0.45 ? mix(C.watTop, C.watMid, t / 0.45) : mix(C.watMid, C.watDeep, (t - 0.45) / 0.55);
+      gl2d.rect(0, y, world.width, (world.height - wt) / waterSteps + 2, col);
+    }
+
+    for (let i = 0; i < 8; i++) {
+      const t = i / 7;
+      const y = wt + t * world.height * 0.22;
+      const alpha = 0.10 * (1 - t);
+      gl2d.rect(0, y, world.width, 2, [C.reflA[0], C.reflA[1], C.reflA[2], alpha]);
+    }
+
+    gl2d.poly([
+      [0, wt - 48], [world.width * 0.16, wt - 118], [world.width * 0.34, wt - 92],
+      [world.width * 0.50, wt - 144], [world.width * 0.68, wt - 82], [world.width, wt - 124],
+      [world.width, wt - 24], [0, wt - 24]
+    ], C.mountainFar);
+
+    gl2d.poly([
+      [0, wt - 18], [world.width * 0.13, wt - 72], [world.width * 0.24, wt - 54],
+      [world.width * 0.39, wt - 102], [world.width * 0.55, wt - 62], [world.width * 0.72, wt - 96],
+      [world.width * 0.86, wt - 70], [world.width, wt - 86], [world.width, wt + 8], [0, wt + 8]
+    ], C.mountainNear);
+
+    gl2d.poly([
+      [0, wt + 12], [world.width * 0.08, wt + 4], [world.width * 0.16, wt + 10], [world.width * 0.24, wt + 3],
+      [world.width * 0.31, wt + 11], [world.width * 0.38, wt + 5], [world.width * 0.45, wt + 12],
+      [world.width * 0.52, wt + 6], [world.width * 0.61, wt + 13], [world.width * 0.70, wt + 4],
+      [world.width * 0.79, wt + 14], [world.width * 0.88, wt + 5], [world.width, wt + 10],
+      [world.width, wt + 30], [0, wt + 30]
+    ], C.shoreDark);
+
+    gl2d.poly([
+      [0, wt + 7], [world.width * 0.12, wt + 0], [world.width * 0.22, wt + 6], [world.width * 0.31, wt - 1],
+      [world.width * 0.43, wt + 8], [world.width * 0.54, wt + 1], [world.width * 0.66, wt + 9],
+      [world.width * 0.77, wt + 2], [world.width * 0.90, wt + 10], [world.width, wt + 6],
+      [world.width, wt + 14], [0, wt + 14]
+    ], C.shoreGrass);
+  }
+
+  function drawFish() {
+    fishSchool.forEach((f) => {
+      const dir = f.vx >= 0 ? 1 : -1;
+      const s = f.species;
+      const y = f.y + Math.sin(world.time * 4 + f.seed) * 3;
+      const bodyCol = speciesStateColor(f);
+      const bodyH = Math.max(5, f.size * s.bodyH);
+      const tailLen = Math.max(6, f.size * s.tail);
+      const dorsalH = Math.max(3, f.size * s.dorsal);
+
+      gl2d.ellipse(f.x, y, f.size, bodyH, 22, bodyCol);
+      gl2d.ellipse(f.x - dir * f.size * 0.08, y - bodyH * 0.34, f.size * 0.58, bodyH * 0.28, 16, s.topLight);
+      gl2d.ellipse(f.x + dir * f.size * 0.06, y + bodyH * 0.30, f.size * 0.50, bodyH * 0.20, 14, s.belly);
+
+      gl2d.tri(
+        f.x - dir * f.size * 0.78, y - bodyH * 0.60,
+        f.x - dir * f.size * 0.28, y - bodyH * 0.58,
+        f.x - dir * f.size * 0.50, y - bodyH * 0.60 - dorsalH,
+        [bodyCol[0] * 0.85, bodyCol[1] * 0.90, bodyCol[2] * 0.90, bodyCol[3] * 0.84]
+      );
+
+      gl2d.tri(
+        f.x - dir * f.size * 0.90, y,
+        f.x - dir * (f.size + tailLen), y - bodyH * 0.65,
+        f.x - dir * (f.size + tailLen), y + bodyH * 0.65,
+        [bodyCol[0] * 0.88, bodyCol[1] * 0.90, bodyCol[2] * 0.86, bodyCol[3] * 0.94]
+      );
+
+      gl2d.line(f.x + dir * f.size * 0.20, y - bodyH * 0.80, f.x + dir * f.size * 0.20, y + bodyH * 0.80, 1.0, s.stripe);
+      gl2d.circle(f.x + dir * f.size * 0.34, y - bodyH * 0.14, 2, 12, C.eye);
+
+      if (s.whiskers) {
+        gl2d.line(f.x + dir * f.size * 0.54, y + bodyH * 0.08, f.x + dir * (f.size + 9), y - bodyH * 0.08, 0.8, [0.85, 0.90, 0.92, 0.38]);
+        gl2d.line(f.x + dir * f.size * 0.54, y + bodyH * 0.16, f.x + dir * (f.size + 10), y + bodyH * 0.34, 0.8, [0.85, 0.90, 0.92, 0.32]);
+      }
+    });
+  }
+
+  function drawSurfaceAndRipples() {
+    const wt = waterTop();
+
+    for (let i = 0; i < 7; i++) {
+      const y = wt + i * 11;
+      let px = 0;
+      let py = y;
+      for (let x = 20; x <= world.width + 20; x += 20) {
+        const base = Math.sin(x * 0.014 + world.time * (1.0 + i * 0.05) + i) * (2.2 + i * 0.55);
+        const chop = Math.sin(x * 0.051 - world.time * (1.7 + i * 0.03) + i * 0.7) * (0.8 + i * 0.12);
+        const ny = y + base + chop;
+        const a = 0.07 + i * 0.012;
+        const c = [C.wave[0], C.wave[1], C.wave[2], a];
+        gl2d.line(px, py, x, ny, 1.2 + i * 0.08, c);
+        px = x;
+        py = ny;
+      }
+    }
+
+    for (let i = 0; i < 14; i++) {
+      const t = i / 13;
+      const y = wt + 8 + t * world.height * 0.28;
+      const alpha = 0.08 * (1 - t) * (0.55 + 0.45 * Math.sin(world.time * 0.9 + i));
+      gl2d.rect(0, y, world.width, 1.5, [C.reflB[0], C.reflB[1], C.reflB[2], alpha]);
+    }
+
+    ripples.forEach((r) => {
+      const c = [C.ripple[0], C.ripple[1], C.ripple[2], clamp(r.a, 0, 0.45)];
+      gl2d.ellipseStroke(r.x, r.y, r.r, r.r * 0.45, 28, 1.45, c);
+      gl2d.ellipseStroke(r.x, r.y, r.r * 0.58, r.r * 0.24, 24, 1.0, [c[0], c[1], c[2], c[3] * 0.65]);
+    });
+  }
+
+    function drawRodAndBobber() {
+    gl2d.line(rod.baseX, rod.baseY, rod.tipX, rod.tipY, 8.6, C.rodWood);
+    gl2d.line(rod.baseX, rod.baseY, rod.tipX, rod.tipY, 2.0, [C.rodEdge[0], C.rodEdge[1], C.rodEdge[2], 0.55]);
+    gl2d.line(rod.baseX, rod.baseY, rod.baseX - (rod.baseX - rod.tipX) * 0.2, rod.baseY - (rod.baseY - rod.tipY) * 0.2, 12, C.handle);
+
+    if (bobber.active) {
+      const cx = (rod.tipX + bobber.x) * 0.5;
+      const cy = (rod.tipY + bobber.y) * 0.5 + (fishingState === FISHING.BITE ? -16 : 32);
+      gl2d.qcurve(rod.tipX, rod.tipY, cx, cy, bobber.x, bobber.y, 22, 1.15, C.line);
+
+      gl2d.ellipse(bobber.x, bobber.ty + 7, 16 + Math.sin(world.time * 8) * 4, 5, 22, C.shadow);
+      gl2d.circle(bobber.x, bobber.y - 7, 8.8, 22, C.bobW);
+      gl2d.rect(bobber.x - 8.8, bobber.y - 15.8, 17.6, 8.8, C.bobR);
+      gl2d.ellipse(bobber.x, bobber.y - 7.5, 5.5, 2.2, 16, [1, 1, 1, 0.30]);
+      gl2d.line(bobber.x, bobber.y - 15, bobber.x, bobber.y - 27, 2, C.handle);
+      gl2d.circle(bobber.x, bobber.y - 27.5, 1.8, 12, C.bobMetal);
+    }
+
+    if (appState === APP.PLAYING && fishingState === FISHING.READY && world.aimY > waterTop() + 8) {
+      const r = 12 + Math.sin(world.time * 8) * 1.2;
+      gl2d.ellipseStroke(world.aimX, world.aimY, r, r, 30, 1.1, C.aim);
+      gl2d.line(world.aimX - r - 4, world.aimY, world.aimX + r + 4, world.aimY, 1.0, C.aim);
+      gl2d.line(world.aimX, world.aimY - r - 4, world.aimX, world.aimY + r + 4, 1.0, C.aim);
+    }
+
+    gl2d.rect(0, 0, world.width, 10, [C.vignette[0], C.vignette[1], C.vignette[2], C.vignette[3] * 0.9]);
+    gl2d.rect(0, world.height - 10, world.width, 10, [C.vignette[0], C.vignette[1], C.vignette[2], C.vignette[3] * 0.9]);
+    gl2d.rect(0, 0, 10, world.height, C.vignette);
+    gl2d.rect(world.width - 10, 0, 10, world.height, C.vignette);
+  }
+
+  function render() {
+    drawBackground();
+    drawFish();
+    drawSurfaceAndRipples();
+    drawRodAndBobber();
+    gl2d.flush();
+  }
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = canvas.getBoundingClientRect();
+    world.width = Math.max(320, Math.floor(r.width));
+    world.height = Math.max(240, Math.floor(r.height));
+    canvas.width = Math.floor(world.width * dpr);
+    canvas.height = Math.floor(world.height * dpr);
+
+    gl2d.resize(world.width, world.height, dpr);
+
+    rod.baseX = world.width + 64;
+    rod.baseY = world.height + 44;
+    rod.tipX = world.width * 0.86;
+    rod.tipY = waterTop() - 4;
+
+    world.aimX = clamp(world.aimX, 0, world.width);
+    world.aimY = clamp(world.aimY, 0, world.height);
+    if (!bobber.active) { bobber.x = rod.tipX; bobber.y = rod.tipY; }
+  }
+
+  let prev = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, Math.max(0.001, (now - prev) / 1000));
+    prev = now;
+    if (appState === APP.PLAYING) updateGame(dt);
+    else { world.time += dt; updateRipples(dt); }
+    render();
+    requestAnimationFrame(loop);
+  }
+
+  function canvasPos(ev) {
+    const r = canvas.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  }
+
+  window.addEventListener("resize", resize);
+  canvas.addEventListener("mousemove", (ev) => {
+    const p = canvasPos(ev);
+    world.aimX = p.x;
+    world.aimY = p.y;
+  });
+  canvas.addEventListener("mousedown", (ev) => {
+    if (appState !== APP.PLAYING) return;
+    const p = canvasPos(ev);
+    world.aimX = p.x;
+    world.aimY = p.y;
+    if (fishingState === FISHING.BITE) reel();
+    else if (fishingState === FISHING.READY) castTo(p.x, p.y);
+  });
+  window.addEventListener("keydown", (ev) => {
+    if (ev.code === "Space") { ev.preventDefault(); reel(); }
+    if (ev.code === "KeyR" && appState === APP.RESULT) startGame();
+  });
+
+  startBtn.addEventListener("click", startGame);
+  restartBtn.addEventListener("click", startGame);
+  castBtn.addEventListener("click", () => castTo(world.aimX, Math.max(world.aimY, waterTop() + 12)));
+  reelBtn.addEventListener("click", reel);
+
+  resize();
+  resetRound();
+  setOverlay();
+  requestAnimationFrame(loop);
+})();
+</script>
 </body>
 </html>
+
+
+
+
+
