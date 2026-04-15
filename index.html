@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lakeside Angler Alpha - WebGL2</title>
+  <title>Lakeside Angler Beta - WebGL2</title>
   <style>
     :root {
       --panel: rgba(9, 28, 34, 0.76);
@@ -67,11 +67,14 @@
   <canvas id="gameCanvas"></canvas>
 
   <div id="hud" class="panel hidden">
-    <div class="title">Alpha Telemetry</div>
+    <div class="title">Beta Telemetry</div>
     <div class="row"><span>Timer</span><strong id="timerValue">90s</strong></div>
     <div class="row"><span>Catches</span><strong id="catchValue">0 / 3</strong></div>
     <div class="row"><span>Escapes</span><strong id="escapeValue">0 / 4</strong></div>
+    <div class="row"><span>Environment</span><strong id="envValue">Morning Glass</strong></div>
+    <div class="row"><span>Cast Zone</span><strong id="zoneValue">Open Water</strong></div>
     <div class="row"><span>Fish AI</span><strong id="aiValue">SCANNING</strong></div>
+    <div class="row"><span>FPS</span><strong id="fpsValue">60</strong></div>
   </div>
 
   <div id="statusBox" class="panel hidden">
@@ -86,14 +89,15 @@
 
   <div id="menuOverlay" class="overlay">
     <div class="card">
-      <h1>Lakeside Angler Alpha</h1>
-      <p id="menuIntro">Assignment 4 build with complete game loop, UI/HUD, and integrated fish NPC behavior FSM. Renderer: native WebGL2. Species: Bluegill, Bass, Trout, Carp, Catfish.</p>
+      <h1>Lakeside Angler Beta</h1>
+      <p id="menuIntro">Beta build with a 3D-style lakeside camera, the Assignment 4 full loop, and a secondary pillar: dynamic lake conditions and procedural habitat zones that change fish behavior, surface motion, and prime casting targets every round.</p>
       <div class="grid">
         <div class="k">Goal</div><div class="v">Catch 3 fish</div>
         <div class="k">Round Time</div><div class="v">90 seconds</div>
         <div class="k">Lose Condition</div><div class="v">4 fish escape</div>
-        <div class="k">Controls</div><div class="v">Mouse + Space</div>
+        <div class="k">Controls</div><div class="v">Mouse + Space + R</div>
       </div>
+      <p>Read the HUD before each cast: the weather pattern and hot zone now matter. Reeds, lily pads, and deep pockets attract different fish, and the scene is now staged in a perspective 3D-style lake view.</p>
       <button id="startBtn" class="cta">Start Session</button>
     </div>
   </div>
@@ -113,7 +117,7 @@
   const APP = { MENU: "MENU", PLAYING: "PLAYING", RESULT: "RESULT" };
   const FISHING = { READY: "READY", CASTING: "CASTING", WAITING: "WAITING", NIBBLE: "NIBBLE", BITE: "BITE", REELING: "REELING" };
   const FISH = { PATROL: "PATROL", APPROACH: "APPROACH", NIBBLE: "NIBBLE", BITE: "BITE", ESCAPE: "ESCAPE" };
-  const CFG = { water: 0.43, fishCount: 10, target: 3, roundSec: 90, maxEscapes: 4 };
+  const CFG = { water: 0.43, fishCount: 10, target: 3, roundSec: 90, maxEscapes: 4, coverCount: 5 };
 
   const canvas = document.getElementById("gameCanvas");
   const hud = document.getElementById("hud");
@@ -126,7 +130,10 @@
   const timerValue = document.getElementById("timerValue");
   const catchValue = document.getElementById("catchValue");
   const escapeValue = document.getElementById("escapeValue");
+  const envValue = document.getElementById("envValue");
+  const zoneValue = document.getElementById("zoneValue");
   const aiValue = document.getElementById("aiValue");
+  const fpsValue = document.getElementById("fpsValue");
   const statusText = document.getElementById("statusText");
   const hintText = document.getElementById("hintText");
   const resultTitle = document.getElementById("resultTitle");
@@ -139,6 +146,7 @@
   const reelBtn = document.getElementById("reelBtn");
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const clamp01 = (v) => clamp(v, 0, 1);
   const rnd = (a, b) => a + Math.random() * (b - a);
   const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -335,9 +343,95 @@
   const world = { width: 1280, height: 720, time: 0, timer: CFG.roundSec, catches: 0, escapes: 0, aimX: 620, aimY: 380 };
   const rod = { baseX: 0, baseY: 0, tipX: 0, tipY: 0 };
   const bobber = { active: false, x: 0, y: 0, sx: 0, sy: 0, tx: 0, ty: 0, p: 0 };
+  const perf = { fps: 60 };
+  let environment = null;
+  let coverNodes = [];
+  let hotspot = null;
 
     const waterTop = () => world.height * CFG.water;
   const mix = (a, b, t) => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t), lerp(a[3], b[3], t)];
+  const tint = (c, shift, alphaScale = 1) => [
+    clamp01(c[0] + shift[0]),
+    clamp01(c[1] + shift[1]),
+    clamp01(c[2] + shift[2]),
+    clamp01(c[3] * alphaScale)
+  ];
+  const lakeDepth = (y) => clamp01((y - waterTop()) / Math.max(1, world.height - waterTop()));
+  const horizonY = () => waterTop() - 34;
+  function projectLake(x, y, lift = 0) {
+    const t = Math.pow(lakeDepth(y), 0.92);
+    const spread = 0.15 + t * 0.92;
+    const sx = world.width * 0.5 + (x - world.width * 0.5) * spread;
+    const sy = lerp(horizonY(), world.height * 0.93, t) - lift;
+    const scale = 0.18 + t * 1.24;
+    return { x: sx, y: sy, scale, t };
+  }
+  function oval3D(x, y, rx, ry, color, lift = 0, seg = 22) {
+    const p = projectLake(x, y, lift);
+    gl2d.ellipse(p.x, p.y, rx * p.scale, ry * p.scale * 0.60, seg, color);
+    return p;
+  }
+  function line3D(x1, y1, x2, y2, thickness, color, lift1 = 0, lift2 = 0) {
+    const a = projectLake(x1, y1, lift1);
+    const b = projectLake(x2, y2, lift2);
+    gl2d.line(a.x, a.y, b.x, b.y, Math.max(0.6, thickness * ((a.scale + b.scale) * 0.5)), color);
+    return { a, b };
+  }
+
+  const ENV_PRESETS = [
+    {
+      name: "Morning Glass",
+      hint: "Low wind. Reeds and pads are active.",
+      skyShift: [0.04, 0.05, 0.03],
+      waterShift: [0.03, 0.04, 0.02],
+      sunAlpha: 1.0,
+      waveGain: 0.85,
+      current: 5,
+      activity: 1.02,
+      depthShift: -0.03,
+      coverBias: 1.22,
+      hotspotBias: 1.26
+    },
+    {
+      name: "Windy Noon",
+      hint: "Surface chop hides your line. Open lanes stay viable.",
+      skyShift: [0.01, 0.02, 0.04],
+      waterShift: [-0.01, 0.02, 0.03],
+      sunAlpha: 0.92,
+      waveGain: 1.18,
+      current: 12,
+      activity: 1.08,
+      depthShift: 0.02,
+      coverBias: 1.08,
+      hotspotBias: 1.14
+    },
+    {
+      name: "Red Dusk",
+      hint: "Predators roam. Prime water spikes hard near structure.",
+      skyShift: [0.10, 0.00, -0.04],
+      waterShift: [0.02, -0.02, -0.02],
+      sunAlpha: 0.86,
+      waveGain: 0.94,
+      current: 8,
+      activity: 1.16,
+      depthShift: -0.01,
+      coverBias: 1.18,
+      hotspotBias: 1.34
+    },
+    {
+      name: "Storm Front",
+      hint: "Heavy chop and current. Deep pockets become safer.",
+      skyShift: [-0.12, -0.08, -0.02],
+      waterShift: [-0.05, -0.03, 0.00],
+      sunAlpha: 0.45,
+      waveGain: 1.36,
+      current: 18,
+      activity: 0.96,
+      depthShift: 0.08,
+      coverBias: 1.28,
+      hotspotBias: 1.20
+    }
+  ];
 
   const SPECIES = [
     {
@@ -466,6 +560,80 @@
     return s.body;
   }
 
+  function pickEnvironment() {
+    const base = ENV_PRESETS[Math.floor(Math.random() * ENV_PRESETS.length)];
+    return { ...base, seed: Math.random() * Math.PI * 2 };
+  }
+
+  function makeCoverNode(index) {
+    const wt = waterTop();
+    const types = ["LILY", "REEDS", "DEEP", "LILY", "REEDS"];
+    const type = types[index % types.length];
+    const edgePad = 90;
+    const x = rnd(edgePad, Math.max(edgePad + 40, world.width - edgePad));
+    if (type === "DEEP") {
+      return { type, x, y: rnd(wt + 150, world.height - 80), r: rnd(55, 84) };
+    }
+    if (type === "REEDS") {
+      return { type, x, y: rnd(wt + 20, wt + 70), r: rnd(44, 62) };
+    }
+    return { type, x, y: rnd(wt + 48, wt + 135), r: rnd(28, 42) };
+  }
+
+  function resetHabitat() {
+    environment = pickEnvironment();
+    coverNodes = Array.from({ length: CFG.coverCount }, (_, index) => makeCoverNode(index));
+    hotspot = coverNodes[Math.floor(Math.random() * coverNodes.length)];
+  }
+
+  function nearestCover(x, y) {
+    let best = null;
+    let bestDist = Infinity;
+    for (let i = 0; i < coverNodes.length; i++) {
+      const node = coverNodes[i];
+      const d = dist(x, y, node.x, node.y) - node.r;
+      if (d < bestDist) {
+        bestDist = d;
+        best = node;
+      }
+    }
+    return best;
+  }
+
+  function coverWeightAt(x, y) {
+    let best = 0;
+    for (let i = 0; i < coverNodes.length; i++) {
+      const node = coverNodes[i];
+      const dx = x - node.x;
+      const dy = y - node.y;
+      const falloff = Math.max(node.r * 1.9, 45);
+      const influence = clamp01(1 - Math.hypot(dx, dy) / falloff);
+      const typeBias = node.type === "DEEP" ? 1.1 : 1.0;
+      best = Math.max(best, influence * typeBias);
+    }
+    return best;
+  }
+
+  function hotspotWeightAt(x, y) {
+    if (!hotspot) return 0;
+    return clamp01(1 - dist(x, y, hotspot.x, hotspot.y) / Math.max(85, hotspot.r * 2.1));
+  }
+
+  function attractionAt(x, y) {
+    const cover = coverWeightAt(x, y) * (environment ? environment.coverBias : 1);
+    const hot = hotspotWeightAt(x, y) * (environment ? environment.hotspotBias : 1);
+    return 1 + cover * 0.32 + hot * 0.46;
+  }
+
+  function castLabelAt(x, y) {
+    const hot = hotspotWeightAt(x, y);
+    const cover = coverWeightAt(x, y);
+    const near = nearestCover(x, y);
+    if (hot > 0.72 && near) return `Prime ${near.type === "DEEP" ? "Deep Pocket" : near.type === "REEDS" ? "Reed Lane" : "Lily Edge"}`;
+    if (cover > 0.48 && near) return near.type === "DEEP" ? "Deep Pocket" : near.type === "REEDS" ? "Reed Edge" : "Lily Cover";
+    return "Open Water";
+  }
+
   class FishAI {
     constructor(species) {
       this.species = species || pickSpecies();
@@ -495,6 +663,8 @@
       this.chaseSpeed = this.maxCruise * 1.35;
       this.escapeSpeed = this.maxCruise * 2.00;
       this.orbitR = this.size * rnd(0.78, 1.08);
+      this.home = coverNodes.length ? coverNodes[Math.floor(Math.random() * coverNodes.length)] : null;
+      this.depthBias = environment ? environment.depthShift + rnd(-0.05, 0.05) : rnd(-0.03, 0.03);
     }
 
     set(next, timer = 0) {
@@ -503,9 +673,16 @@
     }
 
     escape() {
-      const a = Math.atan2(this.y - bobber.y, this.x - bobber.x) + rnd(-0.5, 0.5);
-      this.ex = Math.cos(a);
-      this.ey = Math.sin(a);
+      const shelter = nearestCover(this.x, this.y);
+      if (shelter) {
+        const a = Math.atan2(shelter.y - this.y, shelter.x - this.x) + rnd(-0.35, 0.35);
+        this.ex = Math.cos(a);
+        this.ey = Math.sin(a);
+      } else {
+        const a = Math.atan2(this.y - bobber.y, this.x - bobber.x) + rnd(-0.5, 0.5);
+        this.ex = Math.cos(a);
+        this.ey = Math.sin(a);
+      }
       this.set(FISH.ESCAPE, rnd(1.1, 2.2));
     }
 
@@ -533,8 +710,9 @@
 
     canApproach(dt) {
       if (!bobber.active || fishingState === FISHING.READY || fishingState === FISHING.CASTING || currentHookFish) return false;
-      const detect = 190 + this.size * 2.4;
-      const chance = dt * this.aggr * 0.76;
+      const focus = attractionAt(bobber.x, bobber.ty);
+      const detect = (190 + this.size * 2.4) * focus;
+      const chance = dt * this.aggr * (environment ? environment.activity : 1) * 0.72 * focus;
       return dist(this.x, this.y, bobber.x, bobber.y) < detect && Math.random() < chance;
     }
 
@@ -550,6 +728,11 @@
 
         this.x += this.vx * dt;
         this.y += (this.vy + Math.sin(world.time * 2 + this.seed) * (6 + this.size * 0.08)) * dt;
+        if (this.home) {
+          this.vx += clamp(this.home.x - this.x, -70, 70) * dt * 0.06;
+          this.vy += clamp(this.home.y + this.depthBias * 140 - this.y, -48, 48) * dt * 0.10;
+        }
+        if (environment) this.x += environment.current * dt * (0.15 + this.species.weight);
         this.keep();
         if (this.canApproach(dt)) this.set(FISH.APPROACH, rnd(1.2, 3.5));
         return;
@@ -558,10 +741,12 @@
       if (this.state === FISH.APPROACH) {
         this.timer -= dt;
         this.seek(bobber.x + Math.sin(world.time * 5 + this.seed) * 8, bobber.y + 8, dt, this.chaseSpeed);
+        if (environment) this.x += environment.current * dt * 0.10;
         this.keep();
         if (!bobber.active || fishingState === FISHING.READY || fishingState === FISHING.CASTING) { this.set(FISH.PATROL, rnd(1, 2)); return; }
         const d = dist(this.x, this.y, bobber.x, bobber.y);
-        if (fishingState === FISHING.WAITING && !currentHookFish && d < 40 + this.size * 0.25 && Math.random() < dt * this.aggr * 1.45) beginNibble(this);
+        const strikeBias = attractionAt(bobber.x, bobber.ty);
+        if (fishingState === FISHING.WAITING && !currentHookFish && d < 40 + this.size * 0.25 && Math.random() < dt * this.aggr * 1.25 * strikeBias) beginNibble(this);
         if (d > 290 || this.timer <= 0) this.set(FISH.PATROL, rnd(1, 2.4));
         return;
       }
@@ -614,16 +799,21 @@
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   }
 
-    function updateHUD() {
+  function updateHUD() {
     timerValue.textContent = fmt(world.timer);
     catchValue.textContent = `${world.catches} / ${CFG.target}`;
     escapeValue.textContent = `${world.escapes} / ${CFG.maxEscapes}`;
+    envValue.textContent = environment ? environment.name : "Unassigned";
+    zoneValue.textContent = world.castRating || "Open Water";
     aiValue.textContent = currentHookFish ? `${currentHookFish.species.short} ${currentHookFish.state}` : "SCANNING";
+    fpsValue.textContent = `${perf.fps.toFixed(0)}`;
   }
 
   function resetRound() {
     world.time = 0; world.timer = CFG.roundSec; world.catches = 0; world.escapes = 0;
+    world.castRating = "Open Water";
     currentHookFish = null; phaseTimer = 0; ripples.length = 0;
+    resetHabitat();
     fishSchool = Array.from({ length: CFG.fishCount }, () => new FishAI(pickSpecies()));
     bobber.active = false;
     bobber.x = rod.tipX; bobber.y = rod.tipY;
@@ -637,8 +827,8 @@
     appState = APP.RESULT;
     resultTitle.textContent = win ? "You Win" : "Session Failed";
     resultTitle.className = win ? "win" : "lose";
-    resultReason.textContent = reason;
-    resultStats.textContent = `Catches ${world.catches}/${CFG.target} | Escapes ${world.escapes}/${CFG.maxEscapes} | Time ${fmt(world.timer)}`;
+    resultReason.textContent = `${reason} ${environment ? `Conditions: ${environment.name}.` : ""}`;
+    resultStats.textContent = `Catches ${world.catches}/${CFG.target} | Escapes ${world.escapes}/${CFG.maxEscapes} | Time ${fmt(world.timer)} | Best water ${world.castRating}`;
     setOverlay();
     castBtn.disabled = true; reelBtn.disabled = true;
   }
@@ -655,7 +845,11 @@
     bobber.ty = clamp(y, waterTop() + 20, world.height - 30);
     bobber.x = bobber.sx; bobber.y = bobber.sy; bobber.p = 0;
     currentHookFish = null;
-    setFishing(FISHING.CASTING, "Casting", "Line is in flight.");
+    world.castRating = castLabelAt(bobber.tx, bobber.ty);
+    const castHint = world.castRating === "Open Water"
+      ? `Line is in flight. ${environment ? environment.hint : ""}`
+      : `Targeting ${world.castRating}. ${environment ? environment.hint : ""}`;
+    setFishing(FISHING.CASTING, "Casting", castHint.trim());
   }
 
   function beginNibble(f) {
@@ -663,7 +857,7 @@
     currentHookFish = f;
     phaseTimer = rnd(0.8, 1.4);
     f.set(FISH.NIBBLE, phaseTimer);
-    setFishing(FISHING.NIBBLE, `${f.species.short} nibble`, "Wait for full bite.");
+    setFishing(FISHING.NIBBLE, `${f.species.short} nibble`, `${world.castRating} is producing interest. Wait for the full bite.`);
     ripple(bobber.x, bobber.ty, 5, .3);
   }
 
@@ -671,7 +865,7 @@
     if (!f || currentHookFish !== f || appState !== APP.PLAYING) return;
     phaseTimer = 1.2;
     f.set(FISH.BITE);
-    setFishing(FISHING.BITE, `${f.species.short} BITE`, "Reel now: SPACE or button.");
+    setFishing(FISHING.BITE, `${f.species.short} BITE`, `Reel now: SPACE or button. ${world.castRating}.`);
     ripple(bobber.x, bobber.ty, 12, .5);
   }
 
@@ -680,7 +874,7 @@
     if (currentHookFish) currentHookFish.escape();
     currentHookFish = null;
     bobber.active = false;
-    setFishing(FISHING.READY, "Fish Escaped", "Cast again.");
+    setFishing(FISHING.READY, "Fish Escaped", "Fish broke for cover. Cast again.");
     ripple(bobber.x, bobber.ty, 14, .6);
     if (world.escapes >= CFG.maxEscapes) endGame(false, "Too many fish escaped.");
   }
@@ -693,7 +887,7 @@
       if (currentHookFish) currentHookFish.escape();
       currentHookFish = null;
       phaseTimer = .42;
-      setFishing(FISHING.REELING, `Caught ${caughtSpecies}`, "Bringing the fish in.");
+      setFishing(FISHING.REELING, `Caught ${caughtSpecies}`, `Bringing the fish in from ${world.castRating}.`);
       ripple(bobber.x, bobber.ty, 16, .7);
       if (world.catches >= CFG.target) endGame(true, "Catch target reached.");
       return;
@@ -746,6 +940,7 @@
   function updateGame(dt) {
     world.time += dt;
     world.timer = Math.max(0, world.timer - dt);
+    perf.fps = lerp(perf.fps, 1 / Math.max(dt, 0.0001), 0.08);
     if (world.timer <= 0) {
       if (world.catches >= CFG.target) endGame(true, "Timer reached zero after target completion.");
       else endGame(false, "Time ran out.");
@@ -762,66 +957,82 @@
     gl2d.clear([0.07, 0.14, 0.19, 1]);
 
     const wt = waterTop();
+    const hz = horizonY();
     const skySteps = 44;
     const waterSteps = 58;
+    const skyTop = environment ? tint(C.skyTop, environment.skyShift) : C.skyTop;
+    const skyMid = environment ? tint(C.skyMid, environment.skyShift) : C.skyMid;
+    const skyHaze = environment ? tint(C.skyHaze, environment.skyShift) : C.skyHaze;
+    const watTop = environment ? tint(C.watTop, environment.waterShift) : C.watTop;
+    const watMid = environment ? tint(C.watMid, environment.waterShift) : C.watMid;
+    const watDeep = environment ? tint(C.watDeep, environment.waterShift) : C.watDeep;
 
     for (let i = 0; i < skySteps; i++) {
       const t = i / (skySteps - 1);
-      const y = wt * t;
-      const col = t < 0.55 ? mix(C.skyTop, C.skyMid, t / 0.55) : mix(C.skyMid, C.skyHaze, (t - 0.55) / 0.45);
-      gl2d.rect(0, y, world.width, wt / skySteps + 2, col);
+      const y = hz * t;
+      const col = t < 0.55 ? mix(skyTop, skyMid, t / 0.55) : mix(skyMid, skyHaze, (t - 0.55) / 0.45);
+      gl2d.rect(0, y, world.width, hz / skySteps + 2, col);
     }
 
     const sunX = world.width * 0.76;
-    const sunY = wt * 0.33;
-    gl2d.circle(sunX, sunY, 34, 40, C.sunCore);
-    gl2d.circle(sunX, sunY, 74, 42, C.sunGlow);
-    gl2d.circle(sunX, sunY, 130, 42, [C.sunGlow[0], C.sunGlow[1], C.sunGlow[2], 0.09]);
+    const sunY = hz * 0.38;
+    const sunCore = environment ? tint(C.sunCore, environment.skyShift, environment.sunAlpha) : C.sunCore;
+    const sunGlow = environment ? tint(C.sunGlow, environment.skyShift, environment.sunAlpha) : C.sunGlow;
+    gl2d.circle(sunX, sunY, 34, 40, sunCore);
+    gl2d.circle(sunX, sunY, 74, 42, sunGlow);
+    gl2d.circle(sunX, sunY, 130, 42, [sunGlow[0], sunGlow[1], sunGlow[2], sunGlow[3] * 0.42]);
 
     for (let i = 0; i < waterSteps; i++) {
       const t = i / (waterSteps - 1);
-      const y = wt + (world.height - wt) * t;
-      const col = t < 0.45 ? mix(C.watTop, C.watMid, t / 0.45) : mix(C.watMid, C.watDeep, (t - 0.45) / 0.55);
-      gl2d.rect(0, y, world.width, (world.height - wt) / waterSteps + 2, col);
+      const y = hz + (world.height - hz) * t;
+      const col = t < 0.45 ? mix(watTop, watMid, t / 0.45) : mix(watMid, watDeep, (t - 0.45) / 0.55);
+      gl2d.rect(0, y, world.width, (world.height - hz) / waterSteps + 2, col);
     }
 
     for (let i = 0; i < 8; i++) {
       const t = i / 7;
-      const y = wt + t * world.height * 0.22;
+      const y = hz + t * world.height * 0.24;
       const alpha = 0.10 * (1 - t);
       gl2d.rect(0, y, world.width, 2, [C.reflA[0], C.reflA[1], C.reflA[2], alpha]);
     }
 
     gl2d.poly([
-      [0, wt - 48], [world.width * 0.16, wt - 118], [world.width * 0.34, wt - 92],
-      [world.width * 0.50, wt - 144], [world.width * 0.68, wt - 82], [world.width, wt - 124],
-      [world.width, wt - 24], [0, wt - 24]
+      [0, hz - 18], [world.width * 0.16, hz - 88], [world.width * 0.34, hz - 62],
+      [world.width * 0.50, hz - 114], [world.width * 0.68, hz - 52], [world.width, hz - 94],
+      [world.width, hz + 24], [0, hz + 24]
     ], C.mountainFar);
 
     gl2d.poly([
-      [0, wt - 18], [world.width * 0.13, wt - 72], [world.width * 0.24, wt - 54],
-      [world.width * 0.39, wt - 102], [world.width * 0.55, wt - 62], [world.width * 0.72, wt - 96],
-      [world.width * 0.86, wt - 70], [world.width, wt - 86], [world.width, wt + 8], [0, wt + 8]
+      [0, hz + 8], [world.width * 0.13, hz - 42], [world.width * 0.24, hz - 24],
+      [world.width * 0.39, hz - 72], [world.width * 0.55, hz - 32], [world.width * 0.72, hz - 66],
+      [world.width * 0.86, hz - 40], [world.width, hz - 56], [world.width, hz + 30], [0, hz + 30]
     ], C.mountainNear);
 
     gl2d.poly([
-      [0, wt + 12], [world.width * 0.08, wt + 4], [world.width * 0.16, wt + 10], [world.width * 0.24, wt + 3],
-      [world.width * 0.31, wt + 11], [world.width * 0.38, wt + 5], [world.width * 0.45, wt + 12],
-      [world.width * 0.52, wt + 6], [world.width * 0.61, wt + 13], [world.width * 0.70, wt + 4],
-      [world.width * 0.79, wt + 14], [world.width * 0.88, wt + 5], [world.width, wt + 10],
-      [world.width, wt + 30], [0, wt + 30]
+      [0, hz + 30], [world.width * 0.08, hz + 22], [world.width * 0.16, hz + 28], [world.width * 0.24, hz + 21],
+      [world.width * 0.31, hz + 29], [world.width * 0.38, hz + 23], [world.width * 0.45, hz + 30],
+      [world.width * 0.52, hz + 24], [world.width * 0.61, hz + 31], [world.width * 0.70, hz + 22],
+      [world.width * 0.79, hz + 32], [world.width * 0.88, hz + 23], [world.width, hz + 28],
+      [world.width, hz + 52], [0, hz + 52]
     ], C.shoreDark);
 
     gl2d.poly([
-      [0, wt + 7], [world.width * 0.12, wt + 0], [world.width * 0.22, wt + 6], [world.width * 0.31, wt - 1],
-      [world.width * 0.43, wt + 8], [world.width * 0.54, wt + 1], [world.width * 0.66, wt + 9],
-      [world.width * 0.77, wt + 2], [world.width * 0.90, wt + 10], [world.width, wt + 6],
-      [world.width, wt + 14], [0, wt + 14]
+      [0, hz + 24], [world.width * 0.12, hz + 18], [world.width * 0.22, hz + 24], [world.width * 0.31, hz + 17],
+      [world.width * 0.43, hz + 26], [world.width * 0.54, hz + 19], [world.width * 0.66, hz + 27],
+      [world.width * 0.77, hz + 20], [world.width * 0.90, hz + 28], [world.width, hz + 24],
+      [world.width, hz + 34], [0, hz + 34]
     ], C.shoreGrass);
+
+    gl2d.poly([
+      [0, world.height], [world.width * 0.16, world.height * 0.82], [world.width * 0.32, world.height * 0.77],
+      [world.width * 0.54, world.height * 0.80], [world.width * 0.72, world.height * 0.86], [world.width, world.height],
+      [world.width, world.height], [0, world.height]
+    ], [0.10, 0.12, 0.09, 0.96]);
   }
 
   function drawFish() {
-    fishSchool.forEach((f) => {
+    const ordered = [...fishSchool].sort((a, b) => lakeDepth(a.y) - lakeDepth(b.y));
+    ordered.forEach((f) => {
       const dir = f.vx >= 0 ? 1 : -1;
       const s = f.species;
       const y = f.y + Math.sin(world.time * 4 + f.seed) * 3;
@@ -829,91 +1040,118 @@
       const bodyH = Math.max(5, f.size * s.bodyH);
       const tailLen = Math.max(6, f.size * s.tail);
       const dorsalH = Math.max(3, f.size * s.dorsal);
+      const p = projectLake(f.x, y, 8 + lakeDepth(f.y) * 10);
+      const rx = f.size * p.scale;
+      const ry = bodyH * p.scale * 0.58;
 
-      gl2d.ellipse(f.x, y, f.size, bodyH, 22, bodyCol);
-      gl2d.ellipse(f.x - dir * f.size * 0.08, y - bodyH * 0.34, f.size * 0.58, bodyH * 0.28, 16, s.topLight);
-      gl2d.ellipse(f.x + dir * f.size * 0.06, y + bodyH * 0.30, f.size * 0.50, bodyH * 0.20, 14, s.belly);
+      gl2d.ellipse(p.x, p.y, rx, ry, 22, bodyCol);
+      gl2d.ellipse(p.x - dir * rx * 0.08, p.y - ry * 0.34, rx * 0.58, ry * 0.32, 16, s.topLight);
+      gl2d.ellipse(p.x + dir * rx * 0.06, p.y + ry * 0.30, rx * 0.50, ry * 0.22, 14, s.belly);
 
       gl2d.tri(
-        f.x - dir * f.size * 0.78, y - bodyH * 0.60,
-        f.x - dir * f.size * 0.28, y - bodyH * 0.58,
-        f.x - dir * f.size * 0.50, y - bodyH * 0.60 - dorsalH,
+        p.x - dir * rx * 0.78, p.y - ry * 0.60,
+        p.x - dir * rx * 0.28, p.y - ry * 0.58,
+        p.x - dir * rx * 0.50, p.y - ry * 0.60 - dorsalH * p.scale,
         [bodyCol[0] * 0.85, bodyCol[1] * 0.90, bodyCol[2] * 0.90, bodyCol[3] * 0.84]
       );
 
       gl2d.tri(
-        f.x - dir * f.size * 0.90, y,
-        f.x - dir * (f.size + tailLen), y - bodyH * 0.65,
-        f.x - dir * (f.size + tailLen), y + bodyH * 0.65,
+        p.x - dir * rx * 0.90, p.y,
+        p.x - dir * (rx + tailLen * p.scale), p.y - ry * 0.65,
+        p.x - dir * (rx + tailLen * p.scale), p.y + ry * 0.65,
         [bodyCol[0] * 0.88, bodyCol[1] * 0.90, bodyCol[2] * 0.86, bodyCol[3] * 0.94]
       );
 
-      gl2d.line(f.x + dir * f.size * 0.20, y - bodyH * 0.80, f.x + dir * f.size * 0.20, y + bodyH * 0.80, 1.0, s.stripe);
-      gl2d.circle(f.x + dir * f.size * 0.34, y - bodyH * 0.14, 2, 12, C.eye);
+      gl2d.line(p.x + dir * rx * 0.20, p.y - ry * 0.80, p.x + dir * rx * 0.20, p.y + ry * 0.80, Math.max(0.8, p.scale), s.stripe);
+      gl2d.circle(p.x + dir * rx * 0.34, p.y - ry * 0.14, Math.max(1.2, p.scale * 2.2), 12, C.eye);
 
       if (s.whiskers) {
-        gl2d.line(f.x + dir * f.size * 0.54, y + bodyH * 0.08, f.x + dir * (f.size + 9), y - bodyH * 0.08, 0.8, [0.85, 0.90, 0.92, 0.38]);
-        gl2d.line(f.x + dir * f.size * 0.54, y + bodyH * 0.16, f.x + dir * (f.size + 10), y + bodyH * 0.34, 0.8, [0.85, 0.90, 0.92, 0.32]);
+        gl2d.line(p.x + dir * rx * 0.54, p.y + ry * 0.08, p.x + dir * (rx + 9 * p.scale), p.y - ry * 0.08, Math.max(0.6, p.scale * 0.9), [0.85, 0.90, 0.92, 0.38]);
+        gl2d.line(p.x + dir * rx * 0.54, p.y + ry * 0.16, p.x + dir * (rx + 10 * p.scale), p.y + ry * 0.34, Math.max(0.6, p.scale * 0.9), [0.85, 0.90, 0.92, 0.32]);
       }
     });
   }
 
   function drawSurfaceAndRipples() {
     const wt = waterTop();
+    const hz = horizonY();
+    const waveGain = environment ? environment.waveGain : 1;
 
     for (let i = 0; i < 7; i++) {
-      const y = wt + i * 11;
-      let px = 0;
-      let py = y;
-      for (let x = 20; x <= world.width + 20; x += 20) {
-        const base = Math.sin(x * 0.014 + world.time * (1.0 + i * 0.05) + i) * (2.2 + i * 0.55);
-        const chop = Math.sin(x * 0.051 - world.time * (1.7 + i * 0.03) + i * 0.7) * (0.8 + i * 0.12);
-        const ny = y + base + chop;
+      const planeY = wt + i * 42;
+      let prev = projectLake(20, planeY, 0);
+      for (let x = 40; x <= world.width + 20; x += 20) {
+        const drift = environment ? environment.current * 0.035 : 0;
+        const base = Math.sin(x * 0.014 + world.time * (1.0 + i * 0.05) + i + drift) * (2.2 + i * 0.55) * waveGain;
+        const chop = Math.sin(x * 0.051 - world.time * (1.7 + i * 0.03) + i * 0.7) * (0.8 + i * 0.12) * waveGain;
+        const next = projectLake(x, planeY, -(base + chop) * 2.4);
         const a = 0.07 + i * 0.012;
         const c = [C.wave[0], C.wave[1], C.wave[2], a];
-        gl2d.line(px, py, x, ny, 1.2 + i * 0.08, c);
-        px = x;
-        py = ny;
+        gl2d.line(prev.x, prev.y, next.x, next.y, Math.max(0.8, next.scale * (1.0 + i * 0.08)), c);
+        prev = next;
       }
     }
 
     for (let i = 0; i < 14; i++) {
       const t = i / 13;
-      const y = wt + 8 + t * world.height * 0.28;
+      const y = hz + 8 + t * world.height * 0.28;
       const alpha = 0.08 * (1 - t) * (0.55 + 0.45 * Math.sin(world.time * 0.9 + i));
       gl2d.rect(0, y, world.width, 1.5, [C.reflB[0], C.reflB[1], C.reflB[2], alpha]);
     }
 
+    for (let i = 0; i < coverNodes.length; i++) {
+      const node = coverNodes[i];
+      if (node.type === "DEEP") {
+        oval3D(node.x, node.y, node.r * 1.15, node.r * 0.52, [0.02, 0.08, 0.11, 0.22], 0, 26);
+        oval3D(node.x + 4, node.y - 3, node.r * 0.78, node.r * 0.34, [0.12, 0.22, 0.25, 0.12], 0, 22);
+      } else if (node.type === "REEDS") {
+        for (let j = -4; j <= 4; j++) {
+          const x = node.x + j * 6;
+          const sway = Math.sin(world.time * 2.2 + i + j) * 4;
+          line3D(x, node.y + 18, x + sway, node.y - 18 - Math.abs(j) * 2, 1.0, [0.28, 0.36, 0.20, 0.26], 4, 18);
+          line3D(x, node.y + 18, x + sway * 0.5, node.y - 8, 0.8, [0.22, 0.30, 0.16, 0.22], 2, 10);
+        }
+      } else {
+        oval3D(node.x, node.y, node.r, node.r * 0.52, [0.22, 0.42, 0.20, 0.72], 0, 22);
+        oval3D(node.x + node.r * 0.16, node.y - 2, node.r * 0.46, node.r * 0.26, [0.38, 0.60, 0.28, 0.62], 0, 18);
+        line3D(node.x - node.r * 0.12, node.y - 2, node.x + node.r * 0.28, node.y - node.r * 0.36, 1.1, [0.60, 0.78, 0.39, 0.42], 0, 2);
+      }
+    }
+
     ripples.forEach((r) => {
       const c = [C.ripple[0], C.ripple[1], C.ripple[2], clamp(r.a, 0, 0.45)];
-      gl2d.ellipseStroke(r.x, r.y, r.r, r.r * 0.45, 28, 1.45, c);
-      gl2d.ellipseStroke(r.x, r.y, r.r * 0.58, r.r * 0.24, 24, 1.0, [c[0], c[1], c[2], c[3] * 0.65]);
+      const p = projectLake(r.x, r.y, 0);
+      gl2d.ellipseStroke(p.x, p.y, r.r * p.scale, r.r * p.scale * 0.28, 28, Math.max(0.8, p.scale * 1.6), c);
+      gl2d.ellipseStroke(p.x, p.y, r.r * p.scale * 0.58, r.r * p.scale * 0.16, 24, Math.max(0.7, p.scale * 1.2), [c[0], c[1], c[2], c[3] * 0.65]);
     });
   }
 
-    function drawRodAndBobber() {
-    gl2d.line(rod.baseX, rod.baseY, rod.tipX, rod.tipY, 8.6, C.rodWood);
-    gl2d.line(rod.baseX, rod.baseY, rod.tipX, rod.tipY, 2.0, [C.rodEdge[0], C.rodEdge[1], C.rodEdge[2], 0.55]);
-    gl2d.line(rod.baseX, rod.baseY, rod.baseX - (rod.baseX - rod.tipX) * 0.2, rod.baseY - (rod.baseY - rod.tipY) * 0.2, 12, C.handle);
+  function drawRodAndBobber() {
+    const tip = { x: rod.tipX, y: rod.tipY };
+    gl2d.line(rod.baseX, rod.baseY, tip.x, tip.y, 8.6, C.rodWood);
+    gl2d.line(rod.baseX, rod.baseY, tip.x, tip.y, 2.0, [C.rodEdge[0], C.rodEdge[1], C.rodEdge[2], 0.55]);
+    gl2d.line(rod.baseX, rod.baseY, rod.baseX - (rod.baseX - tip.x) * 0.2, rod.baseY - (rod.baseY - tip.y) * 0.2, 12, C.handle);
 
     if (bobber.active) {
-      const cx = (rod.tipX + bobber.x) * 0.5;
-      const cy = (rod.tipY + bobber.y) * 0.5 + (fishingState === FISHING.BITE ? -16 : 32);
-      gl2d.qcurve(rod.tipX, rod.tipY, cx, cy, bobber.x, bobber.y, 22, 1.15, C.line);
+      const bob = projectLake(bobber.x, bobber.ty, Math.max(0, bobber.ty - bobber.y));
+      const cx = (tip.x + bob.x) * 0.5;
+      const cy = (tip.y + bob.y) * 0.5 + (fishingState === FISHING.BITE ? -16 : 24);
+      gl2d.qcurve(tip.x, tip.y, cx, cy, bob.x, bob.y, 22, 1.15, C.line);
 
-      gl2d.ellipse(bobber.x, bobber.ty + 7, 16 + Math.sin(world.time * 8) * 4, 5, 22, C.shadow);
-      gl2d.circle(bobber.x, bobber.y - 7, 8.8, 22, C.bobW);
-      gl2d.rect(bobber.x - 8.8, bobber.y - 15.8, 17.6, 8.8, C.bobR);
-      gl2d.ellipse(bobber.x, bobber.y - 7.5, 5.5, 2.2, 16, [1, 1, 1, 0.30]);
-      gl2d.line(bobber.x, bobber.y - 15, bobber.x, bobber.y - 27, 2, C.handle);
-      gl2d.circle(bobber.x, bobber.y - 27.5, 1.8, 12, C.bobMetal);
+      gl2d.ellipse(bob.x, bob.y + 7 * bob.scale, (16 + Math.sin(world.time * 8) * 4) * bob.scale, 5 * bob.scale, 22, C.shadow);
+      gl2d.circle(bob.x, bob.y - 7 * bob.scale, 8.8 * bob.scale, 22, C.bobW);
+      gl2d.rect(bob.x - 8.8 * bob.scale, bob.y - 15.8 * bob.scale, 17.6 * bob.scale, 8.8 * bob.scale, C.bobR);
+      gl2d.ellipse(bob.x, bob.y - 7.5 * bob.scale, 5.5 * bob.scale, 2.2 * bob.scale, 16, [1, 1, 1, 0.30]);
+      gl2d.line(bob.x, bob.y - 15 * bob.scale, bob.x, bob.y - 27 * bob.scale, Math.max(1, bob.scale * 2), C.handle);
+      gl2d.circle(bob.x, bob.y - 27.5 * bob.scale, 1.8 * bob.scale, 12, C.bobMetal);
     }
 
     if (appState === APP.PLAYING && fishingState === FISHING.READY && world.aimY > waterTop() + 8) {
-      const r = 12 + Math.sin(world.time * 8) * 1.2;
-      gl2d.ellipseStroke(world.aimX, world.aimY, r, r, 30, 1.1, C.aim);
-      gl2d.line(world.aimX - r - 4, world.aimY, world.aimX + r + 4, world.aimY, 1.0, C.aim);
-      gl2d.line(world.aimX, world.aimY - r - 4, world.aimX, world.aimY + r + 4, 1.0, C.aim);
+      const aim = projectLake(world.aimX, world.aimY, 0);
+      const r = (12 + Math.sin(world.time * 8) * 1.2) * aim.scale;
+      gl2d.ellipseStroke(aim.x, aim.y, r, r * 0.52, 30, 1.1, C.aim);
+      gl2d.line(aim.x - r - 4, aim.y, aim.x + r + 4, aim.y, 1.0, C.aim);
+      gl2d.line(aim.x, aim.y - r * 0.6 - 4, aim.x, aim.y + r * 0.6 + 4, 1.0, C.aim);
     }
 
     gl2d.rect(0, 0, world.width, 10, [C.vignette[0], C.vignette[1], C.vignette[2], C.vignette[3] * 0.9]);
