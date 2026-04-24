@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lakeside Angler Beta - WebGL2</title>
+  <title>Lakeside Angler - Feature Complete</title>
   <style>
     :root {
       --panel: rgba(9, 28, 34, 0.76);
@@ -54,11 +54,23 @@
     .cta { background: linear-gradient(135deg, #2f8f9e, #5abec6); }
     .win { color: var(--ok); }
     .lose { color: var(--bad); }
+    .howto { display: grid; grid-template-columns: 120px 1fr; gap: 6px 12px; margin: 10px 0 14px; font-size: 13px; }
+    .howto .key { display: inline-block; border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; background: rgba(255,255,255,.06); font-family: monospace; color: var(--accent); }
+    .howto .txt { color: var(--dim); line-height: 1.4; }
+    .toast {
+      position: absolute; left: 50%; transform: translateX(-50%); bottom: 78px;
+      background: rgba(14, 36, 44, 0.82); border: 1px solid var(--line); border-radius: 10px;
+      padding: 8px 14px; font-size: 13px; color: var(--text); max-width: 84vw; text-align: center;
+      transition: opacity .35s; pointer-events: none; z-index: 5;
+    }
+    .toast.hidden { opacity: 0; }
+    #audioBtn { background: linear-gradient(135deg, #3a5a6a, #5a8090); padding: 8px 10px; font-size: 12px; }
     @media (max-width: 760px) {
       #hud, #statusBox { width: calc(100% - 28px); min-width: 0; }
       #controls { width: calc(100% - 16px); }
       #controls button { flex: 1; }
       .grid { grid-template-columns: 1fr; }
+      .howto { grid-template-columns: 90px 1fr; }
     }
   </style>
 </head>
@@ -85,19 +97,29 @@
   <div id="controls" class="panel hidden">
     <button id="castBtn">Cast</button>
     <button id="reelBtn" disabled>Reel</button>
+    <button id="audioBtn" title="Toggle sound cues">Sound: On</button>
   </div>
+
+  <div id="toast" class="toast hidden"></div>
 
   <div id="menuOverlay" class="overlay">
     <div class="card">
-      <h1>Lakeside Angler Beta</h1>
-      <p id="menuIntro">Beta build with a 3D-style lakeside camera, the Assignment 4 full loop, and a secondary pillar: dynamic lake conditions and procedural habitat zones that change fish behavior, surface motion, and prime casting targets every round.</p>
+      <h1>Lakeside Angler</h1>
+      <p id="menuIntro">Catch fish before the clock runs out. Each round rolls a different lake condition and habitat layout: reeds, lily pads, and deep pockets attract different species, and the HUD tells you when your aim is in prime water.</p>
       <div class="grid">
         <div class="k">Goal</div><div class="v">Catch 3 fish</div>
         <div class="k">Round Time</div><div class="v">90 seconds</div>
         <div class="k">Lose Condition</div><div class="v">4 fish escape</div>
-        <div class="k">Controls</div><div class="v">Mouse + Space + R</div>
+        <div class="k">Tip</div><div class="v">Aim near reeds / pads</div>
       </div>
-      <p>Read the HUD before each cast: the weather pattern and hot zone now matter. Reeds, lily pads, and deep pockets attract different fish, and the scene is now staged in a perspective 3D-style lake view.</p>
+      <h2 style="font-size:15px;margin-top:8px;">How to Play</h2>
+      <div class="howto">
+        <span class="key">Click water</span><span class="txt">Cast the bobber. Prime zones glow in the HUD.</span>
+        <span class="key">Wait</span><span class="txt">Fish AI approaches — watch the bobber for nibble chatter.</span>
+        <span class="key">Click / Space</span><span class="txt">Hook during the STRIKE window. React fast or the fish escapes.</span>
+        <span class="key">R</span><span class="txt">Restart round from the result screen.</span>
+      </div>
+      <p style="font-size:12px;">Sound cues help you feel the nibble-to-bite transition. Your browser may need a click before audio unlocks.</p>
       <button id="startBtn" class="cta">Start Session</button>
     </div>
   </div>
@@ -144,6 +166,60 @@
   const restartBtn = document.getElementById("restartBtn");
   const castBtn = document.getElementById("castBtn");
   const reelBtn = document.getElementById("reelBtn");
+  const audioBtn = document.getElementById("audioBtn");
+  const toastEl = document.getElementById("toast");
+
+  const SFX = {
+    ctx: null, on: true, master: null,
+    ensure() {
+      if (this.ctx) return;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) { this.on = false; return; }
+        this.ctx = new Ctx();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = 0.35;
+        this.master.connect(this.ctx.destination);
+      } catch (e) { this.on = false; }
+    },
+    blip(freq, dur, type = "sine", vol = 0.6, slide = 0) {
+      if (!this.on) return;
+      this.ensure();
+      if (!this.ctx) return;
+      if (this.ctx.state === "suspended") this.ctx.resume();
+      const o = this.ctx.createOscillator();
+      const g = this.ctx.createGain();
+      o.type = type;
+      const now = this.ctx.currentTime;
+      o.frequency.setValueAtTime(freq, now);
+      if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), now + dur);
+      g.gain.setValueAtTime(0.0001, now);
+      g.gain.exponentialRampToValueAtTime(vol, now + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      o.connect(g).connect(this.master);
+      o.start(now);
+      o.stop(now + dur + 0.02);
+    },
+    cast() { this.blip(520, 0.18, "triangle", 0.45, -220); },
+    splash() { this.blip(260, 0.22, "sine", 0.35, -120); this.blip(700, 0.08, "triangle", 0.18, -300); },
+    nibble() { this.blip(420, 0.06, "square", 0.22); },
+    bite() { this.blip(180, 0.08, "sawtooth", 0.55); this.blip(360, 0.14, "square", 0.32, 180); },
+    catch_() { this.blip(520, 0.10, "triangle", 0.5, 260); this.blip(780, 0.14, "sine", 0.42, 240); },
+    miss() { this.blip(300, 0.18, "sawtooth", 0.38, -180); },
+    win() { [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => this.blip(f, 0.22, "triangle", 0.5), i * 130)); },
+    lose() { [300, 240, 180].forEach((f, i) => setTimeout(() => this.blip(f, 0.28, "sawtooth", 0.45), i * 180)); },
+    toggle() { this.on = !this.on; audioBtn.textContent = `Sound: ${this.on ? "On" : "Off"}`; if (this.on) this.ensure(); }
+  };
+
+  let toastTimer = 0;
+  const onboardShown = { firstCast: false, firstWait: false, firstBite: false };
+  function showToast(msg, ms = 2600) {
+    toastEl.textContent = msg;
+    toastEl.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.add("hidden"), ms);
+  }
+  function hideToast() { toastEl.classList.add("hidden"); }
 
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const clamp01 = (v) => clamp(v, 0, 1);
@@ -830,10 +906,19 @@
     resultReason.textContent = `${reason} ${environment ? `Conditions: ${environment.name}.` : ""}`;
     resultStats.textContent = `Catches ${world.catches}/${CFG.target} | Escapes ${world.escapes}/${CFG.maxEscapes} | Time ${fmt(world.timer)} | Best water ${world.castRating}`;
     setOverlay();
+    hideToast();
     castBtn.disabled = true; reelBtn.disabled = true;
+    if (win) SFX.win(); else SFX.lose();
   }
 
-  function startGame() { appState = APP.PLAYING; resetRound(); setOverlay(); }
+  function startGame() {
+    appState = APP.PLAYING;
+    resetRound();
+    setOverlay();
+    hideToast();
+    SFX.ensure();
+    showToast("Click anywhere on the water to cast.", 2600);
+  }
 
   function ripple(x, y, k = 8, life = 0.45) { ripples.push({ x, y, r: 8 + k, a: .42, g: 46 + k * 3, life }); }
 
@@ -850,6 +935,11 @@
       ? `Line is in flight. ${environment ? environment.hint : ""}`
       : `Targeting ${world.castRating}. ${environment ? environment.hint : ""}`;
     setFishing(FISHING.CASTING, "Casting", castHint.trim());
+    SFX.cast();
+    if (!onboardShown.firstCast) {
+      onboardShown.firstCast = true;
+      showToast("Good cast. Now wait for a nibble, then STRIKE when it bites.");
+    }
   }
 
   function beginNibble(f) {
@@ -859,6 +949,7 @@
     f.set(FISH.NIBBLE, phaseTimer);
     setFishing(FISHING.NIBBLE, `${f.species.short} nibble`, `${world.castRating} is producing interest. Wait for the full bite.`);
     ripple(bobber.x, bobber.ty, 5, .3);
+    SFX.nibble();
   }
 
   function beginBite(f) {
@@ -867,6 +958,11 @@
     f.set(FISH.BITE);
     setFishing(FISHING.BITE, `${f.species.short} BITE`, `Reel now: SPACE or button. ${world.castRating}.`);
     ripple(bobber.x, bobber.ty, 12, .5);
+    SFX.bite();
+    if (!onboardShown.firstBite) {
+      onboardShown.firstBite = true;
+      showToast("STRIKE! Click the water or press SPACE right now.", 1800);
+    }
   }
 
   function missBite() {
@@ -876,6 +972,7 @@
     bobber.active = false;
     setFishing(FISHING.READY, "Fish Escaped", "Fish broke for cover. Cast again.");
     ripple(bobber.x, bobber.ty, 14, .6);
+    SFX.miss();
     if (world.escapes >= CFG.maxEscapes) endGame(false, "Too many fish escaped.");
   }
 
@@ -889,6 +986,7 @@
       phaseTimer = .42;
       setFishing(FISHING.REELING, `Caught ${caughtSpecies}`, `Bringing the fish in from ${world.castRating}.`);
       ripple(bobber.x, bobber.ty, 16, .7);
+      SFX.catch_();
       if (world.catches >= CFG.target) endGame(true, "Catch target reached.");
       return;
     }
@@ -914,6 +1012,7 @@
         bobber.y = bobber.ty;
         ripple(bobber.x, bobber.ty, 9, .4);
         setFishing(FISHING.WAITING, "Waiting", "Fish AI is searching.");
+        SFX.splash();
       }
       return;
     }
@@ -1226,6 +1325,7 @@
   restartBtn.addEventListener("click", startGame);
   castBtn.addEventListener("click", () => castTo(world.aimX, Math.max(world.aimY, waterTop() + 12)));
   reelBtn.addEventListener("click", reel);
+  audioBtn.addEventListener("click", () => SFX.toggle());
 
   resize();
   resetRound();
